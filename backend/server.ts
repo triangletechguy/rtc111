@@ -88,11 +88,36 @@ type ParticipantState = {
   lastSeenAt: string;
 };
 
+type StoredRtcToken = {
+  token: string;
+  tokenId: string;
+  userId: string;
+  externalUserId?: string;
+  roomId: string;
+  role: string;
+  rtcMode: string;
+  permissions: RtcPermission[];
+  issuedAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+};
+
 const users = new Map<string, ExternalUser>();
 const rooms = new Map<string, RoomRecord>();
 const sessions = new Map<string, SessionRecord>();
 const activeSessionByUserRoom = new Map<string, string>();
 const roomParticipants = new Map<string, Map<string, ParticipantState>>();
+
+/**
+ * IMPORTANT:
+ * This stores generated access tokens in backend memory.
+ * For production, replace this Map with a real DB table.
+ *
+ * token string -> token record
+ */
+const issuedRtcTokens = new Map<string, StoredRtcToken>();
+
 let nextRoomId = 1;
 
 app.use((req, res, next) => {
@@ -166,10 +191,14 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/health", (_req, res) => {
+  cleanupExpiredTokens();
+
   res.json({
     status: "ok",
     rooms: rooms.size,
     users: users.size,
+    issuedTokens: issuedRtcTokens.size,
+    activeTokens: Array.from(issuedRtcTokens.values()).filter((token) => isStoredTokenActive(token)).length,
     activeSessions: Array.from(sessions.values()).filter((session) => !session.endedAt).length,
     connectedParticipants: Array.from(roomParticipants.values()).reduce(
       (count, participants) => count + participants.size,
@@ -216,6 +245,7 @@ app.get("/client/me", requireClientAuth, (_req, res) => {
       "rtc.session.end",
       "rtc.signaling",
       "rtc.media_state",
+      "rtc.token.saved_validation",
     ],
   });
 });
@@ -390,6 +420,75 @@ app.post("/client/rtc/session/end", requireClientAuth, (req, res) => {
   res.json({ ended: Boolean(session), session });
 });
 
+/**
+ * Admin/dashboard helper:
+ * List generated tokens that backend currently saved.
+ */
+app.get("/client/rtc/tokens", requireClientAuth, (_req, res) => {
+  cleanupExpiredTokens();
+
+  res.json({
+    tokens: Array.from(issuedRtcTokens.values()).map(serializeStoredToken),
+  });
+});
+
+/**
+ * Admin/dashboard/helper:
+ * Verify whether a client token is the exact saved backend token.
+ */
+app.post("/client/rtc/token/verify", requireClientAuth, (req, res) => {
+  const token = readString(req.body?.token) || getBearerToken(req.header("authorization"));
+
+  if (!token) {
+    res.status(400).json({
+      valid: false,
+      error: "token is required",
+    });
+    return;
+  }
+
+  try {
+    const decoded = verifyRtcToken(token);
+    res.json({
+      valid: true,
+      token: serializeStoredToken(issuedRtcTokens.get(token)!),
+      decoded,
+    });
+  } catch (error) {
+    res.status(401).json({
+      valid: false,
+      error: error instanceof Error ? error.message : "Invalid token",
+    });
+  }
+});
+
+/**
+ * Admin/dashboard/helper:
+ * Revoke generated token so SDK/client can no longer connect.
+ */
+app.post("/client/rtc/token/revoke", requireClientAuth, (req, res) => {
+  const token = readString(req.body?.token);
+
+  if (!token) {
+    res.status(400).json({ revoked: false, error: "token is required" });
+    return;
+  }
+
+  const storedToken = issuedRtcTokens.get(token);
+
+  if (!storedToken) {
+    res.status(404).json({ revoked: false, error: "Token was not found in backend" });
+    return;
+  }
+
+  storedToken.revokedAt = new Date().toISOString();
+
+  res.json({
+    revoked: true,
+    token: serializeStoredToken(storedToken),
+  });
+});
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -409,6 +508,7 @@ io.use((socket, next) => {
   try {
     const decoded = verifyRtcToken(token);
 
+    socket.data.accessToken = token;
     socket.data.userId = decoded.userId;
     socket.data.externalUserId = decoded.externalUserId;
     socket.data.tokenRoomId = decoded.roomId;
@@ -416,8 +516,8 @@ io.use((socket, next) => {
     socket.data.rtcMode = decoded.rtcMode;
     socket.data.permissions = decoded.permissions;
     next();
-  } catch {
-    next(new Error("Invalid or expired RTC token"));
+  } catch (error) {
+    next(new Error(error instanceof Error ? error.message : "Invalid or expired RTC token"));
   }
 });
 
@@ -603,6 +703,8 @@ function issueToken({
   rtcMode: string;
   permissions: RtcPermission[];
 }) {
+  const tokenId = randomUUID();
+
   const payload: RtcAccessToken = {
     scope: "rtc",
     userId,
@@ -617,13 +719,46 @@ function issueToken({
     expiresIn: RTC_TOKEN_EXPIRES_IN,
     issuer: RTC_TOKEN_ISSUER,
     subject: userId,
+    jwtid: tokenId,
   });
+
+  const decoded = jwt.decode(token) as JwtPayload | null;
+  const issuedAt = typeof decoded?.iat === "number"
+    ? new Date(decoded.iat * 1000).toISOString()
+    : new Date().toISOString();
+  const expiresAt = typeof decoded?.exp === "number"
+    ? new Date(decoded.exp * 1000).toISOString()
+    : undefined;
+
+  const storedToken: StoredRtcToken = {
+    token,
+    tokenId,
+    userId,
+    externalUserId,
+    roomId,
+    role,
+    rtcMode,
+    permissions,
+    issuedAt,
+    expiresAt,
+  };
+
+  issuedRtcTokens.set(token, storedToken);
 
   return {
     token,
+    accessToken: token,
+    access_token: token,
+    tokenId,
+    token_id: tokenId,
     tokenType: "Bearer",
+    token_type: "Bearer",
     expiresIn: RTC_TOKEN_EXPIRES_IN,
+    expires_in: RTC_TOKEN_EXPIRES_IN,
+    expiresAt,
+    expires_at: expiresAt,
     userId,
+    user_id: userId,
     ...(externalUserId ? { externalUserId, external_user_id: externalUserId } : {}),
     roomId,
     room_id: Number.isFinite(Number(roomId)) ? Number(roomId) : roomId,
@@ -635,6 +770,23 @@ function issueToken({
 }
 
 function verifyRtcToken(token: string) {
+  cleanupExpiredTokens();
+
+  const storedToken = issuedRtcTokens.get(token);
+
+  if (!storedToken) {
+    throw new Error("RTC token is not saved in backend");
+  }
+
+  if (storedToken.revokedAt) {
+    throw new Error("RTC token was revoked");
+  }
+
+  if (storedToken.expiresAt && Date.now() >= Date.parse(storedToken.expiresAt)) {
+    issuedRtcTokens.delete(token);
+    throw new Error("RTC token is expired");
+  }
+
   const decoded = jwt.verify(token, RTC_TOKEN_SECRET, {
     issuer: RTC_TOKEN_ISSUER,
   }) as RtcAccessToken;
@@ -643,17 +795,29 @@ function verifyRtcToken(token: string) {
     throw new Error("Invalid RTC token payload");
   }
 
+  if (decoded.jti && decoded.jti !== storedToken.tokenId) {
+    throw new Error("RTC token id does not match saved token");
+  }
+
+  if (decoded.userId !== storedToken.userId) {
+    throw new Error("RTC token user does not match saved token");
+  }
+
+  if (decoded.externalUserId !== storedToken.externalUserId) {
+    throw new Error("RTC token external user does not match saved token");
+  }
+
+  if (decoded.roomId !== storedToken.roomId) {
+    throw new Error("RTC token room does not match saved token");
+  }
+
+  storedToken.lastUsedAt = new Date().toISOString();
+
   return {
     ...decoded,
-    role: readString(decoded.role) || "publisher",
-    rtcMode: readString(decoded.rtcMode) || "video",
-    permissions: readPermissions(decoded.permissions, [
-      "join",
-      "publish_audio",
-      "publish_video",
-      "chat",
-      "signal",
-    ]),
+    role: readString(decoded.role) || storedToken.role || "publisher",
+    rtcMode: readString(decoded.rtcMode) || storedToken.rtcMode || "video",
+    permissions: readPermissions(decoded.permissions, storedToken.permissions),
   };
 }
 
@@ -667,15 +831,78 @@ function getTokenFromHandshake(socketAuth: unknown, authorizationHeader: string 
     return socketAuth.token;
   }
 
+  if (
+    socketAuth &&
+    typeof socketAuth === "object" &&
+    "accessToken" in socketAuth &&
+    typeof socketAuth.accessToken === "string"
+  ) {
+    return socketAuth.accessToken;
+  }
+
   const authorization = Array.isArray(authorizationHeader)
     ? authorizationHeader[0]
     : authorizationHeader;
 
+  return getBearerToken(authorization);
+}
+
+function getBearerToken(authorization: string | undefined) {
   if (authorization?.startsWith("Bearer ")) {
     return authorization.slice("Bearer ".length);
   }
 
   return "";
+}
+
+function cleanupExpiredTokens() {
+  const now = Date.now();
+
+  for (const [token, storedToken] of issuedRtcTokens.entries()) {
+    if (storedToken.expiresAt && now >= Date.parse(storedToken.expiresAt)) {
+      issuedRtcTokens.delete(token);
+    }
+  }
+}
+
+function isStoredTokenActive(storedToken: StoredRtcToken) {
+  if (storedToken.revokedAt) {
+    return false;
+  }
+
+  if (storedToken.expiresAt && Date.now() >= Date.parse(storedToken.expiresAt)) {
+    return false;
+  }
+
+  return true;
+}
+
+function serializeStoredToken(storedToken: StoredRtcToken) {
+  return {
+    tokenId: storedToken.tokenId,
+    token_id: storedToken.tokenId,
+    tokenPreview: `${storedToken.token.slice(0, 24)}...${storedToken.token.slice(-12)}`,
+    token_preview: `${storedToken.token.slice(0, 24)}...${storedToken.token.slice(-12)}`,
+    userId: storedToken.userId,
+    user_id: storedToken.userId,
+    externalUserId: storedToken.externalUserId,
+    external_user_id: storedToken.externalUserId,
+    roomId: storedToken.roomId,
+    room_id: Number.isFinite(Number(storedToken.roomId)) ? Number(storedToken.roomId) : storedToken.roomId,
+    role: storedToken.role,
+    rtcMode: storedToken.rtcMode,
+    rtc_mode: storedToken.rtcMode,
+    permissions: storedToken.permissions,
+    issuedAt: storedToken.issuedAt,
+    issued_at: storedToken.issuedAt,
+    expiresAt: storedToken.expiresAt,
+    expires_at: storedToken.expiresAt,
+    revokedAt: storedToken.revokedAt,
+    revoked_at: storedToken.revokedAt,
+    lastUsedAt: storedToken.lastUsedAt,
+    last_used_at: storedToken.lastUsedAt,
+    active: isStoredTokenActive(storedToken),
+  };
 }
 
 function ensureExternalUser(externalUserId: string) {
