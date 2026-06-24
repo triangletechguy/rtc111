@@ -93,7 +93,7 @@ type StoredRtcToken = {
   tokenId: string;
   userId: string;
   externalUserId?: string;
-  roomId: string;
+  roomId?: string;
   role: string;
   rtcMode: string;
   permissions: RtcPermission[];
@@ -323,28 +323,33 @@ app.get("/client/rooms/:roomId", requireClientAuth, (req, res) => {
 });
 
 app.post("/client/rtc/token", requireClientAuth, (req, res) => {
-  const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
+  const appName = readString(req.body?.app_name) || readString(req.body?.appName);
+  const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId) || appName;
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
 
   if (!externalUserId) {
-    res.status(400).json({ error: "external_user_id is required" });
-    return;
-  }
-
-  if (!roomId) {
-    res.status(400).json({ error: "room_id is required" });
+    res.status(400).json({ error: "app_name or external_user_id is required" });
     return;
   }
 
   ensureExternalUser(externalUserId);
-  ensureRoom(roomId);
+
+  if (roomId) {
+    ensureRoom(roomId);
+  }
 
   const role = readString(req.body?.role) || "publisher";
-  const rtcMode = readString(req.body?.rtc_mode) || readString(req.body?.rtcMode) || "voice";
-  const permissions = readPermissions(req.body?.permissions, ["join", "publish_audio", "chat", "signal"]);
+  const rtcMode = readString(req.body?.rtc_mode) || readString(req.body?.rtcMode) || "video";
+  const permissions = readPermissions(req.body?.permissions, [
+    "join",
+    "publish_audio",
+    "publish_video",
+    "chat",
+    "signal",
+  ]);
 
   res.json(issueToken({
-    roomId,
+    ...(roomId ? { roomId } : {}),
     userId: externalUserId,
     externalUserId,
     role,
@@ -696,7 +701,7 @@ function issueToken({
   rtcMode,
   permissions,
 }: {
-  roomId: string;
+  roomId?: string;
   userId: string;
   externalUserId?: string;
   role: string;
@@ -709,7 +714,7 @@ function issueToken({
     scope: "rtc",
     userId,
     ...(externalUserId ? { externalUserId } : {}),
-    roomId,
+    ...(roomId ? { roomId } : {}),
     role,
     rtcMode,
     permissions,
@@ -735,7 +740,7 @@ function issueToken({
     tokenId,
     userId,
     externalUserId,
-    roomId,
+    ...(roomId ? { roomId } : {}),
     role,
     rtcMode,
     permissions,
@@ -760,8 +765,12 @@ function issueToken({
     userId,
     user_id: userId,
     ...(externalUserId ? { externalUserId, external_user_id: externalUserId } : {}),
-    roomId,
-    room_id: Number.isFinite(Number(roomId)) ? Number(roomId) : roomId,
+    ...(roomId
+      ? {
+        roomId,
+        room_id: Number.isFinite(Number(roomId)) ? Number(roomId) : roomId,
+      }
+      : {}),
     role,
     rtcMode,
     rtc_mode: rtcMode,

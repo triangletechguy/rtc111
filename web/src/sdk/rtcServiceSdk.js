@@ -92,6 +92,7 @@ export async function createRoom({
 export async function issueRtcToken({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   apiKey = RTC_DEFAULT_API_KEY,
+  appName,
   externalUserId,
   roomId,
   role = "publisher",
@@ -102,8 +103,9 @@ export async function issueRtcToken({
     method: "POST",
     headers: getClientHeaders(apiKey),
     body: {
+      ...(appName ? { app_name: appName } : {}),
       external_user_id: externalUserId,
-      room_id: roomId,
+      ...(roomId ? { room_id: roomId } : {}),
       role,
       rtc_mode: rtcMode,
       permissions,
