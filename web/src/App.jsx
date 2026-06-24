@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   RTC_DEFAULT_SIGNALING_URL,
   RtcServiceClient,
-  createRtcToken,
+  endRtcSession,
+  startRtcSession,
 } from "./sdk/rtcServiceSdk";
 import "./App.css";
 
@@ -18,12 +19,18 @@ export default function App() {
   const [clientId, setClientId] = useState("web-client");
   const [accessToken, setAccessToken] = useState("");
   const [tokenRoomId, setTokenRoomId] = useState("");
-  const [status, setStatus] = useState("Create token");
+  const [sessionId, setSessionId] = useState("");
+  const [participants, setParticipants] = useState([]);
+  const [status, setStatus] = useState("Start session");
   const [error, setError] = useState("");
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
-  const [isCreatingToken, setIsCreatingToken] = useState(false);
+  const [isStartingSession, setIsStartingSession] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [isInRoom, setIsInRoom] = useState(false);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isCameraOn, setIsCameraOn] = useState(true);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
 
   useEffect(() => {
     return () => {
@@ -32,13 +39,14 @@ export default function App() {
     };
   }, []);
 
-  async function handleCreateToken(event) {
+  async function handleStartSession(event) {
     event.preventDefault();
-    await createTokenForRoom();
+    await startSessionForRoom();
   }
 
-  async function createTokenForRoom() {
+  async function startSessionForRoom() {
     const trimmedRoomId = roomId.trim();
+    const trimmedClientId = clientId.trim() || "web-client";
 
     if (!trimmedRoomId) {
       setError("Room id is required");
@@ -46,24 +54,31 @@ export default function App() {
     }
 
     setError("");
-    setIsCreatingToken(true);
-    setStatus("Creating token");
+    setIsStartingSession(true);
+    setStatus("Starting session");
 
     try {
       unbindClientEventsRef.current();
       rtcClientRef.current?.destroy();
       setIsSocketConnected(false);
       setIsCameraReady(false);
+      setIsInRoom(false);
+      setParticipants([]);
 
-      const tokenResponse = await createRtcToken({
+      const sessionResponse = await startRtcSession({
         apiUrl: RTC_DEFAULT_SIGNALING_URL,
+        externalUserId: trimmedClientId,
         roomId: trimmedRoomId,
-        userId: clientId.trim() || undefined,
+        role: "publisher",
+        rtcMode: "video",
+        micEnabled: !isMicMuted,
+        cameraEnabled: isCameraOn,
+        permissions: ["join", "publish_audio", "publish_video", "chat", "signal"],
       });
 
       const rtcClient = new RtcServiceClient({
         signalingUrl: RTC_DEFAULT_SIGNALING_URL,
-        token: tokenResponse.token,
+        token: sessionResponse.token,
       });
 
       bindRtcClient(rtcClient);
@@ -71,24 +86,27 @@ export default function App() {
         localVideo: localVideoRef.current,
         remoteVideo: remoteVideoRef.current,
       });
+      rtcClient.muteLocalAudio(isMicMuted);
+      rtcClient.setCameraEnabled(isCameraOn);
 
       rtcClientRef.current = rtcClient;
 
-      setAccessToken(tokenResponse.token);
-      setTokenRoomId(tokenResponse.roomId ?? trimmedRoomId);
-      setClientId(tokenResponse.userId);
+      setAccessToken(sessionResponse.token);
+      setTokenRoomId(String(sessionResponse.roomId ?? trimmedRoomId));
+      setClientId(sessionResponse.externalUserId ?? sessionResponse.userId ?? trimmedClientId);
+      setSessionId(sessionResponse.session?.id ?? "");
 
       await rtcClient.connect();
-      setStatus("Token ready");
+      setStatus("Session ready");
 
       return rtcClient;
     } catch (event) {
       const message = getErrorMessage(event);
       setError(message);
-      setStatus("Token failed");
+      setStatus("Session failed");
       return null;
     } finally {
-      setIsCreatingToken(false);
+      setIsStartingSession(false);
     }
   }
 
@@ -117,8 +135,23 @@ export default function App() {
         setIsCameraReady(true);
         setStatus("Camera ready");
       }),
-      rtcClient.on("room-joined", ({ roomId: joinedRoomId }) => {
-        setStatus(`Joined ${joinedRoomId}`);
+      rtcClient.on("room-joined", ({ room, state }) => {
+        setIsInRoom(true);
+        setStatus(`Joined ${room?.id ?? roomId}`);
+        setParticipants(state?.participants ?? []);
+      }),
+      rtcClient.on("room-left", () => {
+        setIsInRoom(false);
+        setParticipants([]);
+        setStatus("Left room");
+      }),
+      rtcClient.on("room-state", ({ participants: nextParticipants = [] }) => {
+        setParticipants(nextParticipants);
+      }),
+      rtcClient.on("local-media-state", ({ micEnabled, cameraEnabled, speakerEnabled }) => {
+        setIsMicMuted(!micEnabled);
+        setIsCameraOn(cameraEnabled);
+        setIsSpeakerOn(speakerEnabled);
       }),
       rtcClient.on("waiting-for-peer", () => {
         setStatus("Waiting for peer");
@@ -172,7 +205,7 @@ export default function App() {
       let rtcClient = rtcClientRef.current;
 
       if (!rtcClient || tokenRoomId !== trimmedRoomId || !accessToken) {
-        rtcClient = await createTokenForRoom();
+        rtcClient = await startSessionForRoom();
       }
 
       if (!rtcClient) {
@@ -184,7 +217,11 @@ export default function App() {
         remoteVideo: remoteVideoRef.current,
       });
 
-      await rtcClient.joinRoom(trimmedRoomId);
+      await rtcClient.joinRoom(trimmedRoomId, {
+        micEnabled: !isMicMuted,
+        cameraEnabled: isCameraOn,
+        speakerEnabled: isSpeakerOn,
+      });
     } catch (event) {
       setError(getErrorMessage(event));
     } finally {
@@ -198,8 +235,55 @@ export default function App() {
     setRoomId(nextRoomId);
 
     if (accessToken && nextRoomId.trim() !== tokenRoomId) {
-      setStatus("Create token");
-      setError("Create a new token for this room before joining");
+      setStatus("Start session");
+      setError("Start a new session for this room before joining");
+    }
+  }
+
+  async function leaveRoom() {
+    const trimmedRoomId = roomId.trim();
+    const trimmedClientId = clientId.trim();
+
+    rtcClientRef.current?.leaveRoom({ stopMedia: true });
+    setIsCameraReady(false);
+    setIsInRoom(false);
+    setParticipants([]);
+
+    if (sessionId && trimmedRoomId && trimmedClientId) {
+      try {
+        await endRtcSession({
+          apiUrl: RTC_DEFAULT_SIGNALING_URL,
+          externalUserId: trimmedClientId,
+          roomId: trimmedRoomId,
+        });
+      } catch (event) {
+        setError(getErrorMessage(event));
+      }
+    }
+  }
+
+  function toggleMic() {
+    const nextMuted = !isMicMuted;
+
+    rtcClientRef.current?.muteLocalAudio(nextMuted);
+    setIsMicMuted(nextMuted);
+  }
+
+  function toggleCamera() {
+    const nextEnabled = !isCameraOn;
+
+    rtcClientRef.current?.setCameraEnabled(nextEnabled);
+    setIsCameraOn(nextEnabled);
+  }
+
+  async function toggleSpeaker() {
+    const nextEnabled = !isSpeakerOn;
+
+    try {
+      await rtcClientRef.current?.setSpeakerphoneOn(nextEnabled);
+      setIsSpeakerOn(nextEnabled);
+    } catch (event) {
+      setError(getErrorMessage(event));
     }
   }
 
@@ -216,7 +300,8 @@ export default function App() {
     return event instanceof Error ? event.message : "Something went wrong";
   }
 
-  const canJoin = !isJoining && !isCreatingToken;
+  const canJoin = !isJoining && !isStartingSession;
+  const canControlMedia = Boolean(rtcClientRef.current);
   const tokenPreview = accessToken
     ? `${accessToken.slice(0, 24)}...${accessToken.slice(-12)}`
     : "No token";
@@ -235,7 +320,7 @@ export default function App() {
           </div>
         </header>
 
-        <form className="access-bar" onSubmit={handleCreateToken}>
+        <form className="access-bar" onSubmit={handleStartSession}>
           <div className="field-group">
             <label htmlFor="client-id">Client ID</label>
             <input
@@ -246,12 +331,12 @@ export default function App() {
             />
           </div>
 
-          <button type="submit" disabled={isCreatingToken}>
-            {isCreatingToken ? "Creating" : "Create token"}
+          <button type="submit" disabled={isStartingSession}>
+            {isStartingSession ? "Starting" : "Start session"}
           </button>
 
           <div className={accessToken ? "token-chip ready" : "token-chip"}>
-            {accessToken ? "Token ready" : "Token required"}
+            {accessToken ? "Session ready" : "Session required"}
           </div>
         </form>
 
@@ -273,7 +358,23 @@ export default function App() {
           <button type="submit" disabled={!canJoin}>
             {isJoining ? "Joining" : "Join"}
           </button>
+          <button type="button" className="secondary" onClick={leaveRoom} disabled={!isInRoom}>
+            Leave
+          </button>
         </form>
+
+        <div className="control-bar" aria-label="Call controls">
+          <button type="button" onClick={toggleMic} disabled={!canControlMedia}>
+            {isMicMuted ? "Unmute" : "Mute"}
+          </button>
+          <button type="button" onClick={toggleCamera} disabled={!canControlMedia}>
+            {isCameraOn ? "Camera off" : "Camera on"}
+          </button>
+          <button type="button" onClick={toggleSpeaker} disabled={!canControlMedia}>
+            {isSpeakerOn ? "Speaker off" : "Speaker on"}
+          </button>
+          <div className="participant-count">{participants.length} online</div>
+        </div>
 
         {error ? (
           <p className="notice" role="alert">
@@ -286,7 +387,7 @@ export default function App() {
             <video ref={localVideoRef} autoPlay muted playsInline />
             <div className="video-label">
               <span>Local</span>
-              <small>{isCameraReady ? "Ready" : "Pending"}</small>
+              <small>{isCameraReady ? (isCameraOn ? "Ready" : "Camera off") : "Pending"}</small>
             </div>
           </article>
 
@@ -298,6 +399,25 @@ export default function App() {
             </div>
           </article>
         </div>
+
+        <section className="room-state" aria-label="Room participants">
+          <h2>Participants</h2>
+          <div className="participant-list">
+            {participants.length > 0 ? (
+              participants.map((participant) => (
+                <div className="participant-row" key={participant.socketId}>
+                  <span>{participant.userId}</span>
+                  <small>
+                    {participant.micEnabled ? "mic on" : "muted"} /{" "}
+                    {participant.cameraEnabled ? "camera on" : "camera off"}
+                  </small>
+                </div>
+              ))
+            ) : (
+              <p>No one has joined this room yet.</p>
+            )}
+          </div>
+        </section>
       </section>
     </main>
   );

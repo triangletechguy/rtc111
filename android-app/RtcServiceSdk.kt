@@ -1,4 +1,5 @@
 import android.content.Context
+import android.media.AudioManager
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
@@ -51,13 +52,19 @@ class RtcServiceSdk(
         fun onConnected(socketId: String) {}
         fun onDisconnected(reason: String) {}
         fun onRoomJoined(roomId: String) {}
+        fun onRoomLeft(roomId: String) {}
         fun onRoomFull() {}
         fun onRoomError(message: String) {}
+        fun onRoomState(participantCount: Int) {}
         fun onWaitingForPeer() {}
         fun onPeerJoined(peerId: String) {}
         fun onPeerLeft(peerId: String) {}
+        fun onParticipantUpdated(peerId: String, micEnabled: Boolean, cameraEnabled: Boolean) {}
         fun onLocalStream(stream: MediaStream) {}
         fun onRemoteStream(stream: MediaStream) {}
+        fun onLocalAudioMuted(muted: Boolean) {}
+        fun onLocalVideoEnabled(enabled: Boolean) {}
+        fun onSpeakerphoneChanged(enabled: Boolean) {}
         fun onConnectionStateChanged(state: PeerConnection.PeerConnectionState) {}
         fun onError(message: String) {}
     }
@@ -78,6 +85,9 @@ class RtcServiceSdk(
     private var audioSource: AudioSource? = null
     private var videoTrack: VideoTrack? = null
     private var audioTrack: AudioTrack? = null
+    private var micEnabled = config.enableAudio
+    private var cameraEnabled = config.enableVideo
+    private var speakerEnabled = true
 
     fun attachRenderers(
         localRenderer: SurfaceViewRenderer?,
@@ -129,7 +139,14 @@ class RtcServiceSdk(
         }
 
         startLocalMedia()
-        socket?.emit("room:join", JSONObject().put("roomId", roomId))
+        socket?.emit(
+            "room:join",
+            JSONObject()
+                .put("roomId", roomId)
+                .put("micEnabled", micEnabled)
+                .put("cameraEnabled", cameraEnabled)
+                .put("speakerEnabled", speakerEnabled)
+        )
         listener.onRoomJoined(roomId)
     }
 
@@ -145,6 +162,7 @@ class RtcServiceSdk(
         if (config.enableAudio) {
             audioSource = factory.createAudioSource(MediaConstraints())
             audioTrack = factory.createAudioTrack("audio-${UUID.randomUUID()}", audioSource)
+            audioTrack?.setEnabled(micEnabled)
             stream.addTrack(audioTrack)
         }
 
@@ -168,6 +186,7 @@ class RtcServiceSdk(
                 capturer.startCapture(config.videoWidth, config.videoHeight, config.videoFps)
 
                 videoTrack = factory.createVideoTrack("video-${UUID.randomUUID()}", source)
+                videoTrack?.setEnabled(cameraEnabled)
                 localRenderer?.let { videoTrack?.addSink(it) }
                 stream.addTrack(videoTrack)
             }
@@ -175,6 +194,37 @@ class RtcServiceSdk(
 
         localStream = stream
         listener.onLocalStream(stream)
+    }
+
+    fun leaveRoom() {
+        socket?.emit("room:leave")
+        closePeerConnection()
+        listener.onRoomLeft(config.roomId)
+    }
+
+    fun muteLocalAudio(muted: Boolean) {
+        micEnabled = !muted
+        audioTrack?.setEnabled(micEnabled)
+        emitMediaState()
+        listener.onLocalAudioMuted(muted)
+    }
+
+    fun setLocalVideoEnabled(enabled: Boolean) {
+        cameraEnabled = enabled
+        videoTrack?.setEnabled(enabled)
+        emitMediaState()
+        listener.onLocalVideoEnabled(enabled)
+    }
+
+    fun setSpeakerphoneOn(enabled: Boolean) {
+        speakerEnabled = enabled
+
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager?.isSpeakerphoneOn = enabled
+
+        emitMediaState()
+        listener.onSpeakerphoneChanged(enabled)
     }
 
     fun disconnect() {
@@ -244,6 +294,26 @@ class RtcServiceSdk(
 
         socket.on("room:full") {
             listener.onRoomFull()
+        }
+
+        socket.on("room:left") { args ->
+            val roomId = (args.firstOrNull() as? JSONObject)?.optString("roomId")
+                ?: config.roomId
+            listener.onRoomLeft(roomId)
+        }
+
+        socket.on("room:state") { args ->
+            val state = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomState(state.optInt("participantCount"))
+        }
+
+        socket.on("participant:updated") { args ->
+            val participant = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onParticipantUpdated(
+                participant.optString("socketId"),
+                participant.optBoolean("micEnabled"),
+                participant.optBoolean("cameraEnabled")
+            )
         }
 
         socket.on("existing-users") { args ->
@@ -483,6 +553,16 @@ class RtcServiceSdk(
             JSONObject()
                 .put("to", peerId)
                 .put("data", data)
+        )
+    }
+
+    private fun emitMediaState() {
+        socket?.emit(
+            "media:state",
+            JSONObject()
+                .put("micEnabled", micEnabled)
+                .put("cameraEnabled", cameraEnabled)
+                .put("speakerEnabled", speakerEnabled)
         )
     }
 
