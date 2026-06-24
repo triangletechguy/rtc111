@@ -34,19 +34,15 @@ class RtcServiceSdk(
 ) {
 
     data class Config(
-        val signalingUrl: String,
-        val token: String,
-        val roomId: String,
-        val enableAudio: Boolean = true,
-        val enableVideo: Boolean = true,
-        val videoWidth: Int = 1280,
-        val videoHeight: Int = 720,
-        val videoFps: Int = 30,
-        val iceServers: List<PeerConnection.IceServer> = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
-                .createIceServer()
-        )
-    )
+    val signalingUrl: String,
+    val accessToken: String,
+    val roomId: String,
+    val enableAudio: Boolean = true,
+    val enableVideo: Boolean = true,
+    val videoWidth: Int = 1280,
+    val videoHeight: Int = 720,
+    val videoFps: Int = 30
+)
 
     interface Listener {
         fun onConnected(socketId: String) {}
@@ -106,26 +102,21 @@ class RtcServiceSdk(
     }
 
     fun connect() {
-        if (config.token.isBlank()) {
-            listener.onError("RTC token is required")
-            return
-        }
-
-        if (socket?.connected() == true) {
-            socket?.id()?.let { listener.onConnected(it) }
-            return
-        }
-
-        val options = IO.Options().apply {
-            auth = mapOf("token" to config.token)
-            transports = arrayOf("websocket", "polling")
-        }
-
-        socket = IO.socket(config.signalingUrl, options).also { socket ->
-            bindSocketEvents(socket)
-            socket.connect()
-        }
+    if (config.accessToken.isBlank()) {
+        listener.onError("Access token must be provided by host app code (not UI)")
+        return
     }
+
+    val options = IO.Options().apply {
+        auth = mapOf("token" to config.accessToken)
+        transports = arrayOf("websocket", "polling")
+    }
+
+    socket = IO.socket(config.signalingUrl, options).also { socket ->
+        bindSocketEvents(socket)
+        socket.connect()
+    }
+}
 
     fun joinRoom(roomId: String = config.roomId) {
         if (roomId.isBlank()) {

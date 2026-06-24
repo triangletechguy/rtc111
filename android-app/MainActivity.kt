@@ -19,17 +19,35 @@ class MainActivity : AppCompatActivity(), RtcServiceSdk.Listener {
             return
         }
 
-        rtcSdk = RtcServiceSdk(
-            context = this,
-            config = RtcServiceSdk.Config(
-                signalingUrl = SIGNALING_URL,
-                token = RTC_ACCESS_TOKEN,
-                roomId = ROOM_ID
-            ),
-            listener = this
-        )
+        val sdk = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config(
+        signalingUrl = "http://10.0.2.2:4000",
+        accessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9....",
+        roomId = "room1"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onConnected(socketId: String) {
+            Log.d("RTC", "Connected: $socketId")
+        }
 
-        rtcSdk.connect()
+        override fun onRoomJoined(roomId: String) {
+            Log.d("RTC", "Joined room: $roomId")
+        }
+
+        override fun onRemoteStream(stream: MediaStream) {
+            Log.d("RTC", "Remote stream received")
+        }
+
+        override fun onError(message: String) {
+            Log.e("RTC", message)
+        }
+    }
+)
+
+sdk.connect()
+sdk.joinRoom("room1")
+
     }
 
     override fun onConnected(socketId: String) {
