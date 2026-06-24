@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Separate local project
+Test-rtc/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node / Vite build output
+dist/
+build/
+.vite/
+coverage/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+**/.pub-cache/
+**/.pub/
+**/build/
+
+# Android / Gradle
+.gradle/
+**/.gradle/
+**/local.properties
+**/captures/
+**/android/app/build/
+
+# iOS / macOS generated files
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Pods/
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Pods/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
