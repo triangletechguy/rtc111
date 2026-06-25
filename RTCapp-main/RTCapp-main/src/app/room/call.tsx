@@ -5,7 +5,7 @@ export default function OneToOneCall() {
     <RtcPlatformRoom
       title="1-to-1 Call"
       subtitle="Testing direct calling through the RTC platform Android SDK"
-      defaultRoomId="hapi"
+      defaultRoomId="buzzcast"
       accentColor="#4158d0"
     />
   );

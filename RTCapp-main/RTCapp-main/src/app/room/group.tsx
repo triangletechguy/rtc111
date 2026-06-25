@@ -5,7 +5,7 @@ export default function GroupVideoRoom() {
     <RtcPlatformRoom
       title="Group Video"
       subtitle="Testing group video through the RTC platform Android SDK"
-      defaultRoomId="hapi"
+      defaultRoomId="buzzcast"
       accentColor="#c850c0"
     />
   );

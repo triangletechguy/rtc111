@@ -21,8 +21,18 @@ import {
   RtcPlatformVideoView,
 } from "./rtc-platform-native";
 
-const RTC_SIGNALING_URL = "http://funint.online:4000";
-const RTC_API_KEY = "rtc-dev-api-key";
+const RTC_API_URL =
+  process.env.EXPO_PUBLIC_RTC_API_URL ?? "https://funint.online/api";
+const RTC_SIGNALING_URL =
+  process.env.EXPO_PUBLIC_RTC_SIGNALING_URL ?? "https://funint.online";
+const RTC_API_KEY =
+  process.env.EXPO_PUBLIC_RTC_API_KEY ?? "rtc-dev-api-key";
+const RTC_EXTERNAL_USER_ID =
+  process.env.EXPO_PUBLIC_RTC_EXTERNAL_USER_ID ?? "buzzcast";
+const RTC_DASHBOARD_ACCESS_TOKEN =
+  process.env.EXPO_PUBLIC_RTC_ACCESS_TOKEN ?? "";
+const RTC_DEFAULT_ROOM_ID =
+  process.env.EXPO_PUBLIC_RTC_DEFAULT_ROOM_ID ?? RTC_EXTERNAL_USER_ID;
 const RTC_PERMISSIONS = [
   "join",
   "publish_audio",
@@ -74,6 +84,10 @@ function describeEvent(event: RtcPlatformEvent) {
       return `Joined room ${event.roomId ?? ""}`;
     case "roomState":
       return `Room participants: ${event.participantCount ?? 0}`;
+    case "participantUpdated":
+      return `Participant ${event.userId ?? event.peerId ?? "local"} mic ${
+        event.micEnabled ? "on" : "off"
+      }, camera ${event.cameraEnabled ? "on" : "off"}`;
     case "waitingForPeer":
       return "Waiting for another peer in the same room";
     case "peerJoined":
@@ -92,6 +106,8 @@ function describeEvent(event: RtcPlatformEvent) {
       return event.enabled ? "Camera enabled" : "Camera disabled";
     case "speakerphoneChanged":
       return event.enabled ? "Speaker enabled" : "Speaker disabled";
+    case "tokenUpdated":
+      return "Access token updated";
     case "roomError":
     case "error":
       return event.message ?? "RTC error";
@@ -105,15 +121,19 @@ function describeEvent(event: RtcPlatformEvent) {
 }
 
 async function createRtcAccessToken(roomId: string) {
-  const response = await fetch(`${RTC_SIGNALING_URL}/client/rtc/token`, {
+  if (!RTC_API_KEY) {
+    return RTC_DASHBOARD_ACCESS_TOKEN;
+  }
+
+  const response = await fetch(`${RTC_API_URL}/client/rtc/token`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${RTC_API_KEY}`,
+      Authorization: `Bearer ${RTC_API_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       app_name: "RTCapp-main",
-      external_user_id: `android-${Date.now()}`,
+      external_user_id: RTC_EXTERNAL_USER_ID,
       room_id: roomId,
       role: "publisher",
       rtc_mode: "video",
@@ -121,7 +141,7 @@ async function createRtcAccessToken(roomId: string) {
     }),
   });
 
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     throw new Error(payload?.error ?? "Unable to create RTC token");
@@ -137,8 +157,8 @@ async function createRtcAccessToken(roomId: string) {
 
 export default function RtcPlatformRoom({
   title = "RTC Platform Test",
-  subtitle = "Uses rtc-platform-live-sdk-release.aar",
-  defaultRoomId = "hapi",
+  subtitle = "Uses rtc-default-sdk-release.aar",
+  defaultRoomId = RTC_DEFAULT_ROOM_ID,
   accentColor = "#208AEF",
 }: RtcPlatformRoomProps) {
   const router = useRouter();
@@ -187,8 +207,16 @@ export default function RtcPlatformRoom({
       return;
     }
 
-    if (!RtcPlatform || !RtcPlatformVideoView) {
+    if (!RtcPlatform) {
       Alert.alert("Android only", "The RTC native SDK bridge is only available on Android.");
+      return;
+    }
+
+    if (!RTC_API_KEY && !RTC_DASHBOARD_ACCESS_TOKEN) {
+      Alert.alert(
+        "Token missing",
+        "Set EXPO_PUBLIC_RTC_API_KEY or EXPO_PUBLIC_RTC_ACCESS_TOKEN in .env.local before starting the RTC SDK.",
+      );
       return;
     }
 
@@ -208,9 +236,11 @@ export default function RtcPlatformRoom({
       setSpeakerOn(true);
       setStatus("Requesting fresh RTC token...");
       const accessToken = await createRtcAccessToken(trimmedRoomId);
+      setStatus("Starting RTC SDK...");
       await RtcPlatform.start({
         signalingUrl: RTC_SIGNALING_URL,
         token: accessToken,
+        externalUserId: RTC_EXTERNAL_USER_ID,
         roomId: trimmedRoomId,
         enableAudio: true,
         enableVideo: true,
@@ -250,7 +280,7 @@ export default function RtcPlatformRoom({
     setSpeakerOn(next);
   };
 
-  if (inCall && RtcPlatformVideoView) {
+  if (inCall) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.callHeader}>
@@ -265,9 +295,21 @@ export default function RtcPlatformRoom({
         </View>
 
         <View style={styles.videoShell}>
-          <RtcPlatformVideoView style={styles.videoView} />
+          {RtcPlatformVideoView ? (
+            <RtcPlatformVideoView style={styles.videoView} />
+          ) : (
+            <View style={styles.videoFallback}>
+              <Text style={styles.videoFallbackText}>Android RTC video view unavailable</Text>
+            </View>
+          )}
           <View style={styles.statusOverlay}>
+            <Text style={styles.statusKicker}>rtc-default-sdk-release.aar</Text>
             <Text style={styles.statusText}>{status}</Text>
+            <View style={styles.stateRow}>
+              <Text style={styles.stateChip}>Mic {muted ? "off" : "on"}</Text>
+              <Text style={styles.stateChip}>Camera {cameraOn ? "on" : "off"}</Text>
+              <Text style={styles.stateChip}>Speaker {speakerOn ? "on" : "off"}</Text>
+            </View>
           </View>
         </View>
 
@@ -311,7 +353,7 @@ export default function RtcPlatformRoom({
             autoCapitalize="none"
             autoCorrect={false}
             editable={!joining}
-            placeholder="hapi"
+            placeholder="buzzcast"
             placeholderTextColor="#666"
           />
         </View>
@@ -324,13 +366,17 @@ export default function RtcPlatformRoom({
           {joining ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.joinText}>Start RTC Test</Text>
+            <Text style={styles.joinText}>Start SDK Test</Text>
           )}
         </TouchableOpacity>
 
         <View style={styles.infoBox}>
+          <Text style={styles.infoText}>API: {RTC_API_URL}</Text>
           <Text style={styles.infoText}>Server: {RTC_SIGNALING_URL}</Text>
-          <Text style={styles.infoText}>Token: generated by VPS backend</Text>
+          <Text style={styles.infoText}>User: {RTC_EXTERNAL_USER_ID}</Text>
+          <Text style={styles.infoText}>
+            Token: {RTC_API_KEY ? "generated on start" : "configured locally"}
+          </Text>
           <Text style={styles.infoText}>Status: {status}</Text>
         </View>
 
@@ -441,17 +487,41 @@ function createStyles(accentColor: string) {
     endSmallText: { color: "#fff", fontSize: 13, fontWeight: "700" },
     videoShell: { flex: 1, backgroundColor: "#000" },
     videoView: { flex: 1 },
+    videoFallback: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20,
+    },
+    videoFallbackText: { color: "#fff", fontSize: 14, fontWeight: "700" },
     statusOverlay: {
       position: "absolute",
       left: 16,
       right: 16,
       bottom: 16,
-      backgroundColor: "rgba(0,0,0,0.6)",
+      backgroundColor: "rgba(0,0,0,0.68)",
       borderRadius: 10,
       paddingHorizontal: 12,
       paddingVertical: 10,
+      gap: 8,
     },
-    statusText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+    statusKicker: {
+      color: accentColor,
+      fontSize: 11,
+      fontWeight: "800",
+      textTransform: "uppercase",
+    },
+    statusText: { color: "#fff", fontSize: 13, fontWeight: "700" },
+    stateRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+    stateChip: {
+      color: "#e8e8e8",
+      fontSize: 11,
+      fontWeight: "700",
+      backgroundColor: "rgba(255,255,255,0.14)",
+      borderRadius: 999,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
     controls: {
       flexDirection: "row",
       flexWrap: "wrap",

@@ -5,7 +5,7 @@ export default function SoloLiveRoom() {
     <RtcPlatformRoom
       title="Solo Live"
       subtitle="Testing live video through the RTC platform Android SDK"
-      defaultRoomId="hapi"
+      defaultRoomId="buzzcast"
       accentColor="#e91e8c"
     />
   );

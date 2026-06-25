@@ -5,7 +5,7 @@ export default function ScreenShareRoom() {
     <RtcPlatformRoom
       title="Screen Share"
       subtitle="Testing the RTC platform Android SDK connection path"
-      defaultRoomId="hapi"
+      defaultRoomId="buzzcast"
       accentColor="#534ab7"
     />
   );

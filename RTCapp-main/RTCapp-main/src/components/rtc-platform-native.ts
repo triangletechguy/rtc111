@@ -11,6 +11,7 @@ import {
 type RtcStartOptions = {
   signalingUrl: string;
   token: string;
+  externalUserId?: string;
   roomId: string;
   enableAudio?: boolean;
   enableVideo?: boolean;
@@ -23,6 +24,7 @@ export type RtcPlatformEvent = {
   reason?: string;
   message?: string;
   peerId?: string;
+  userId?: string;
   state?: string;
   participantCount?: number;
   muted?: boolean;
