@@ -1,7 +1,10 @@
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.projection.MediaProjection
+import android.util.Base64
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
@@ -28,6 +31,8 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import java.nio.charset.Charset
+import java.util.Locale
 import java.util.UUID
 
 class RtcServiceSdk(
@@ -46,6 +51,7 @@ class RtcServiceSdk(
         val videoWidth: Int = 1280,
         val videoHeight: Int = 720,
         val videoFps: Int = 30,
+        val rtcMode: String = if (enableVideo) "video" else "voice",
         val iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         )
@@ -65,6 +71,7 @@ class RtcServiceSdk(
                 enableAudio = true,
                 enableVideo = false,
                 enableNoiseCancellation = true,
+                rtcMode = "voice",
                 iceServers = iceServers
             )
 
@@ -99,6 +106,7 @@ class RtcServiceSdk(
                 roomId = roomId,
                 enableAudio = true,
                 enableVideo = true,
+                rtcMode = "video",
                 iceServers = iceServers
             )
 
@@ -146,6 +154,62 @@ class RtcServiceSdk(
                     PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
                 )
             ): Config = videoCall(signalingUrl, accessToken, roomId, iceServers)
+
+            fun dashboardToken(
+                accessToken: String,
+                roomId: String? = null,
+                signalingUrl: String = RtcServiceSdk.DEFAULT_SIGNALING_URL,
+                iceServers: List<PeerConnection.IceServer> = RtcServiceSdk.defaultIceServers()
+            ): Config {
+                val tokenInfo = RtcServiceSdk.parseAccessToken(accessToken)
+                val resolvedRoomId = roomId?.takeIf { it.isNotBlank() }
+                    ?: tokenInfo.roomId?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalArgumentException("Room id is required when the RTC token does not include roomId")
+
+                if (tokenInfo.isExpired()) {
+                    throw IllegalArgumentException("RTC access token is expired")
+                }
+
+                val enableVideo = RtcServiceSdk.shouldEnableVideo(tokenInfo)
+                val enableAudio = RtcServiceSdk.shouldEnableAudio(tokenInfo)
+
+                return Config(
+                    signalingUrl = signalingUrl,
+                    accessToken = accessToken,
+                    roomId = resolvedRoomId,
+                    enableAudio = enableAudio,
+                    enableVideo = enableVideo,
+                    enableNoiseCancellation = enableAudio,
+                    rtcMode = tokenInfo.rtcMode ?: if (enableVideo) "video" else "voice",
+                    iceServers = iceServers
+                )
+            }
+        }
+    }
+
+    data class AccessTokenInfo(
+        val rawToken: String,
+        val appId: String?,
+        val roomId: String?,
+        val userId: String?,
+        val externalUserId: String?,
+        val role: String?,
+        val rtcMode: String?,
+        val permissions: List<String>,
+        val issuedAtEpochSeconds: Long?,
+        val expiresAtEpochSeconds: Long?,
+        val issuer: String?,
+        val subject: String?,
+        val tokenId: String?,
+        val claims: JSONObject
+    ) {
+        fun isExpired(nowMillis: Long = System.currentTimeMillis(), skewSeconds: Long = 30): Boolean {
+            val expiresAt = expiresAtEpochSeconds ?: return false
+            return nowMillis >= (expiresAt - skewSeconds).coerceAtLeast(0) * 1000
+        }
+
+        fun hasPermission(permission: String): Boolean {
+            return permissions.any { it.equals(permission, ignoreCase = true) }
         }
     }
 
@@ -350,6 +414,57 @@ class RtcServiceSdk(
         localRenderer?.let { videoTrack?.addSink(it) }
     }
 
+    fun accessTokenInfo(): AccessTokenInfo {
+        return parseAccessToken(config.accessToken)
+    }
+
+    fun requiredAndroidPermissions(): List<String> {
+        return requiredAndroidPermissions(config)
+    }
+
+    fun missingRequiredAndroidPermissions(): List<String> {
+        return requiredAndroidPermissions().filter { permission ->
+            context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun hasRequiredAndroidPermissions(): Boolean {
+        return missingRequiredAndroidPermissions().isEmpty()
+    }
+
+    @JvmOverloads
+    fun start(initialEffects: JSONObject? = null) {
+        val roomId = config.roomId
+
+        if (roomId.isBlank()) {
+            listener.onRoomError("Room id is required")
+            return
+        }
+
+        when (RtcServiceSdk.normalizeRtcMode(config.rtcMode)) {
+            "voice",
+            "audio",
+            "voice_call",
+            "one_to_one_voice",
+            "one_to_one_voice_call",
+            "group_voice",
+            "group_voice_chat",
+            "youtube",
+            "youtube_room" -> connectAndJoin(roomId)
+            "solo_video_live",
+            "solo_live" -> connectAndJoinSoloVideoLive(roomId, initialEffects)
+            "live_pk",
+            "pk" -> connectAndJoinLivePkRoom(roomId, initialEffects)
+            else -> {
+                if (config.enableVideo) {
+                    connectAndJoinVideoCall(roomId, initialEffects)
+                } else {
+                    connectAndJoin(roomId)
+                }
+            }
+        }
+    }
+
     fun connect() {
         if (config.accessToken.isBlank()) {
             listener.onError("Access token must be provided by host app code (not UI)")
@@ -466,7 +581,10 @@ class RtcServiceSdk(
             return
         }
 
-        startLocalMedia()
+        if (!ensureLocalMediaStarted()) {
+            return
+        }
+
         joiningRoomId = roomId
         updateConnectionIndicator(ConnectionIndicator.JOINING_ROOM)
         socket?.emit(
@@ -484,9 +602,20 @@ class RtcServiceSdk(
     }
 
     fun startLocalMedia() {
+        ensureLocalMediaStarted()
+    }
+
+    private fun ensureLocalMediaStarted(): Boolean {
         if (localStream != null) {
             localStream?.let { listener.onLocalStream(it) }
-            return
+            return true
+        }
+
+        val missingPermissions = missingRequiredAndroidPermissions()
+
+        if (missingPermissions.isNotEmpty()) {
+            listener.onError("Missing Android runtime permissions: ${missingPermissions.joinToString(", ")}")
+            return false
         }
 
         val factory = getPeerConnectionFactory()
@@ -502,6 +631,7 @@ class RtcServiceSdk(
 
         localStream = stream
         listener.onLocalStream(stream)
+        return true
     }
 
     fun leaveRoom() {
@@ -2051,8 +2181,175 @@ class RtcServiceSdk(
     }
 
     companion object {
+        const val DEFAULT_SIGNALING_URL = "https://funint.online"
+
         @Volatile
         private var factoryInitialized = false
+
+        @JvmStatic
+        fun defaultIceServers(): List<PeerConnection.IceServer> {
+            return listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+        }
+
+        @JvmStatic
+        fun parseAccessToken(accessToken: String): AccessTokenInfo {
+            val parts = accessToken.split(".")
+
+            if (parts.size < 2 || parts[1].isBlank()) {
+                throw IllegalArgumentException("RTC access token must be a JWT")
+            }
+
+            val payloadBytes = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            val payload = JSONObject(payloadBytes.toString(Charset.forName("UTF-8")))
+
+            return AccessTokenInfo(
+                rawToken = accessToken,
+                appId = payload.optNullableString("appId", "app_id"),
+                roomId = payload.optNullableString("roomId", "room_id"),
+                userId = payload.optNullableString("userId", "user_id", "sub"),
+                externalUserId = payload.optNullableString("externalUserId", "external_user_id"),
+                role = payload.optNullableString("role"),
+                rtcMode = payload.optNullableString("rtcMode", "rtc_mode"),
+                permissions = payload.optStringList("permissions"),
+                issuedAtEpochSeconds = payload.optNullableLong("iat"),
+                expiresAtEpochSeconds = payload.optNullableLong("exp"),
+                issuer = payload.optNullableString("iss"),
+                subject = payload.optNullableString("sub"),
+                tokenId = payload.optNullableString("jti", "tokenId", "token_id"),
+                claims = payload
+            )
+        }
+
+        @JvmStatic
+        fun requiredAndroidPermissions(config: Config): List<String> {
+            return buildList {
+                if (config.enableAudio) {
+                    add(Manifest.permission.RECORD_AUDIO)
+                }
+
+                if (config.enableVideo) {
+                    add(Manifest.permission.CAMERA)
+                }
+            }.distinct()
+        }
+
+        @JvmStatic
+        fun requiredAndroidPermissionsForToken(accessToken: String): List<String> {
+            val tokenInfo = parseAccessToken(accessToken)
+            return buildList {
+                if (shouldEnableAudio(tokenInfo)) {
+                    add(Manifest.permission.RECORD_AUDIO)
+                }
+
+                if (shouldEnableVideo(tokenInfo)) {
+                    add(Manifest.permission.CAMERA)
+                }
+            }.distinct()
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun fromDashboardToken(
+            context: Context,
+            accessToken: String,
+            roomId: String,
+            listener: Listener,
+            signalingUrl: String = DEFAULT_SIGNALING_URL
+        ): RtcServiceSdk {
+            return RtcServiceSdk(
+                context = context,
+                config = Config.dashboardToken(
+                    signalingUrl = signalingUrl,
+                    accessToken = accessToken,
+                    roomId = roomId
+                ),
+                listener = listener
+            )
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun fromDashboardToken(
+            context: Context,
+            accessToken: String,
+            listener: Listener,
+            signalingUrl: String = DEFAULT_SIGNALING_URL
+        ): RtcServiceSdk {
+            return RtcServiceSdk(
+                context = context,
+                config = Config.dashboardToken(
+                    signalingUrl = signalingUrl,
+                    accessToken = accessToken
+                ),
+                listener = listener
+            )
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun startWithDashboardToken(
+            context: Context,
+            accessToken: String,
+            roomId: String,
+            listener: Listener,
+            signalingUrl: String = DEFAULT_SIGNALING_URL,
+            initialEffects: JSONObject? = null
+        ): RtcServiceSdk {
+            return fromDashboardToken(context, accessToken, roomId, listener, signalingUrl)
+                .also { it.start(initialEffects) }
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun startWithDashboardToken(
+            context: Context,
+            accessToken: String,
+            listener: Listener,
+            signalingUrl: String = DEFAULT_SIGNALING_URL,
+            initialEffects: JSONObject? = null
+        ): RtcServiceSdk {
+            return fromDashboardToken(context, accessToken, listener, signalingUrl)
+                .also { it.start(initialEffects) }
+        }
+
+        internal fun shouldEnableAudio(tokenInfo: AccessTokenInfo): Boolean {
+            if (tokenInfo.permissions.isEmpty()) {
+                return true
+            }
+
+            return tokenInfo.hasPermission("publish_audio")
+        }
+
+        internal fun shouldEnableVideo(tokenInfo: AccessTokenInfo): Boolean {
+            val rtcMode = tokenInfo.rtcMode ?: return tokenInfo.hasPermission("publish_video")
+
+            if (isAudioOnlyRtcMode(rtcMode)) {
+                return false
+            }
+
+            return tokenInfo.permissions.isEmpty()
+                || tokenInfo.hasPermission("publish_video")
+                || tokenInfo.hasPermission("screen_share")
+        }
+
+        internal fun isAudioOnlyRtcMode(rtcMode: String): Boolean {
+            return when (normalizeRtcMode(rtcMode)) {
+                "voice",
+                "audio",
+                "voice_call",
+                "one_to_one_voice",
+                "one_to_one_voice_call",
+                "group_voice",
+                "group_voice_chat",
+                "youtube",
+                "youtube_room" -> true
+                else -> false
+            }
+        }
+
+        internal fun normalizeRtcMode(rtcMode: String): String {
+            return rtcMode.trim().lowercase(Locale.US).replace("-", "_")
+        }
 
         private fun initializePeerConnectionFactory(context: Context) {
             if (factoryInitialized) {
@@ -2068,6 +2365,49 @@ class RtcServiceSdk(
                     factoryInitialized = true
                 }
             }
+        }
+
+        private fun JSONObject.optNullableString(vararg names: String): String? {
+            for (name in names) {
+                val value = opt(name)
+
+                if (value != null && value != JSONObject.NULL) {
+                    val text = value.toString()
+
+                    if (text.isNotBlank()) {
+                        return text
+                    }
+                }
+            }
+
+            return null
+        }
+
+        private fun JSONObject.optNullableLong(name: String): Long? {
+            if (!has(name) || isNull(name)) {
+                return null
+            }
+
+            return try {
+                optLong(name)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun JSONObject.optStringList(name: String): List<String> {
+            val array = optJSONArray(name) ?: return emptyList()
+            val values = mutableListOf<String>()
+
+            for (index in 0 until array.length()) {
+                val value = array.opt(index)?.toString()?.takeIf { it.isNotBlank() }
+
+                if (value != null) {
+                    values.add(value)
+                }
+            }
+
+            return values
         }
     }
 }

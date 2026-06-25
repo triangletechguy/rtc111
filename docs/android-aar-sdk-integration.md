@@ -21,11 +21,14 @@ cd rtc-android-sdk
 ./gradlew :rtc-default-sdk:assembleRelease
 ```
 
-Output:
+Outputs:
 
 ```text
 rtc-android-sdk/rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release.aar
+rtc-android-sdk/rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-contained.aar
 ```
+
+Use `rtc-default-sdk-release-self-contained.aar` when distributing a single file to an app team. The repository root `rtc-default-sdk-release.aar` is also copied from that self-contained build.
 
 The SDK package exposed by the AAR is:
 
@@ -41,7 +44,7 @@ Copy the release AAR into the client Android app:
 app/libs/rtc-default-sdk-release.aar
 ```
 
-In the client app module Gradle file, add the local AAR and runtime dependencies. Local AAR files do not bring a Maven POM with transitive dependencies, so the host app must include WebRTC and Socket.IO explicitly.
+In the client app module Gradle file, add the local AAR. The release AAR is self-contained and embeds WebRTC, Socket.IO, OkHttp, Okio, and WebRTC native libraries.
 
 Kotlin DSL:
 
@@ -56,10 +59,6 @@ android {
 
 dependencies {
     implementation(files("libs/rtc-default-sdk-release.aar"))
-    implementation("io.github.webrtc-sdk:android:144.7559.09")
-    implementation("io.socket:socket.io-client:2.1.2") {
-        exclude(group = "org.json", module = "json")
-    }
 }
 ```
 
@@ -76,10 +75,6 @@ android {
 
 dependencies {
     implementation files("libs/rtc-default-sdk-release.aar")
-    implementation "io.github.webrtc-sdk:android:144.7559.09"
-    implementation("io.socket:socket.io-client:2.1.2") {
-        exclude group: "org.json", module: "json"
-    }
 }
 ```
 
@@ -152,11 +147,63 @@ Important response fields:
 }
 ```
 
-Return only `access_token` and the room metadata needed by the Android app.
+Return only `access_token` and the room metadata needed by the Android app. If the dashboard-issued token already includes `room_id`, the SDK can read it from the token. If the token does not include `room_id`, pass the room id from the app UI when creating the SDK.
 
 The token is checked during the Socket.IO/WebRTC signaling connection. If the token expires or is revoked, fetch a fresh token from the client backend and create a new `RtcServiceSdk` instance with the new token.
 
-## Start A Video Room
+## Start From A Dashboard Token
+
+The SDK can parse the dashboard/backend token, infer audio vs video from `rtc_mode` and `permissions`, check token expiration, and start the correct room flow with one SDK call.
+
+```kotlin
+import com.rtcone.sdk.RtcServiceSdk
+
+private var rtc: RtcServiceSdk? = null
+
+private fun startRtc() {
+    val accessToken = tokenFromDashboardOrBackend
+    val roomId = "support-room-1"
+
+    rtc = RtcServiceSdk.startWithDashboardToken(
+        context = this,
+        accessToken = accessToken,
+        roomId = roomId,
+        listener = object : RtcServiceSdk.Listener {
+            override fun onRoomJoined(roomId: String) {
+                // The backend accepted the room join.
+            }
+
+            override fun onRtcConnectionIndicatorChanged(
+                indicator: RtcServiceSdk.ConnectionIndicator
+            ) {
+                // Update connecting/in-room/waiting/connected/failed UI.
+            }
+
+            override fun onError(message: String) {
+                // Missing runtime permissions, expired token, connection errors, etc.
+            }
+        }
+    )
+}
+```
+
+If the token contains `roomId`/`room_id`, the app can omit the explicit room id:
+
+```kotlin
+rtc = RtcServiceSdk.startWithDashboardToken(
+    context = this,
+    accessToken = tokenWithRoomId,
+    listener = listener
+)
+```
+
+Apps that want to request only the permissions required by a token can ask the SDK:
+
+```kotlin
+val permissions = RtcServiceSdk.requiredAndroidPermissionsForToken(accessToken)
+```
+
+## Start A Video Room Manually
 
 Create or reference two `SurfaceViewRenderer` views for local and remote video. Then initialize the SDK with the signaling URL, token, room id, and listener callbacks.
 

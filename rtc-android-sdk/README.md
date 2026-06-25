@@ -12,15 +12,46 @@ For client app setup with the `.aar` file, Gradle dependencies, runtime permissi
 ./gradlew :rtc-default-sdk:assembleRelease
 ```
 
-Output:
+Outputs:
 
 ```text
 rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release.aar
+rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-contained.aar
 ```
+
+Use the self-contained AAR for file-based app integration. It embeds the SDK runtime dependencies and WebRTC native libraries so the host app does not need separate WebRTC or Socket.IO dependency declarations.
 
 ## Runtime Endpoint
 
-Use the deployed signaling URL and an RTC access token returned by your backend:
+Use the deployed signaling URL and an RTC access token returned by the dashboard/backend. The easiest path is the dashboard-token helper:
+
+```kotlin
+val rtc = RtcServiceSdk.startWithDashboardToken(
+    context = this,
+    accessToken = tokenFromDashboardOrBackend,
+    roomId = "room1",
+    listener = listener
+)
+```
+
+If the token includes `roomId`/`room_id`, the SDK can read it:
+
+```kotlin
+val rtc = RtcServiceSdk.startWithDashboardToken(
+    context = this,
+    accessToken = tokenWithRoomId,
+    listener = listener
+)
+```
+
+The SDK parses `rtc_mode` and `permissions` from the token to choose audio vs video. It also exposes:
+
+```kotlin
+RtcServiceSdk.parseAccessToken(token)
+RtcServiceSdk.requiredAndroidPermissionsForToken(token)
+```
+
+Lower-level configuration remains available:
 
 ```kotlin
 RtcServiceSdk.Config(

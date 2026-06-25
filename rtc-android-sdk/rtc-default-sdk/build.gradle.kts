@@ -1,3 +1,6 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -52,5 +55,116 @@ dependencies {
     api("io.github.webrtc-sdk:android:144.7559.09")
     implementation("io.socket:socket.io-client:2.1.2") {
         exclude(group = "org.json", module = "json")
+    }
+}
+
+val bundleSelfContainedReleaseAar by tasks.registering {
+    group = "build"
+    description = "Builds a release AAR that embeds runtime jars, dependency AAR classes, and native libs."
+
+    dependsOn("bundleReleaseAar")
+
+    val releaseAar = layout.buildDirectory.file("outputs/aar/rtc-default-sdk-release.aar")
+    val selfContainedAar = layout.buildDirectory.file("outputs/aar/rtc-default-sdk-release-self-contained.aar")
+    val runtimeClasspath = configurations.named("releaseRuntimeClasspath")
+
+    inputs.file(releaseAar)
+    inputs.files(runtimeClasspath)
+    outputs.file(selfContainedAar)
+
+    doLast {
+        val sourceAar = releaseAar.get().asFile
+        val targetAar = selfContainedAar.get().asFile
+        val workDir = layout.buildDirectory.dir("intermediates/self-contained-aar/release").get().asFile
+        val embeddedDir = layout.buildDirectory.dir("intermediates/self-contained-aar/dependencies").get().asFile
+        val libsDir = workDir.resolve("libs")
+
+        delete(workDir)
+        delete(embeddedDir)
+
+        copy {
+            from(zipTree(sourceAar))
+            into(workDir)
+        }
+
+        libsDir.mkdirs()
+
+        runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
+            val group = artifact.moduleVersion.id.group
+
+            if (group == "org.jetbrains.kotlin" || group == "org.jetbrains") {
+                return@forEach
+            }
+
+            val file = artifact.file
+            val safeName = artifact.file.nameWithoutExtension
+                .replace(Regex("[^A-Za-z0-9_.-]"), "-")
+
+            when (file.extension.lowercase()) {
+                "jar" -> {
+                    copy {
+                        from(file)
+                        into(libsDir)
+                        rename { "$safeName.jar" }
+                    }
+                }
+                "aar" -> {
+                    val dependencyDir = embeddedDir.resolve(safeName)
+
+                    copy {
+                        from(zipTree(file))
+                        into(dependencyDir)
+                    }
+
+                    dependencyDir.resolve("classes.jar")
+                        .takeIf { it.exists() }
+                        ?.copyTo(libsDir.resolve("$safeName.jar"), overwrite = true)
+
+                    dependencyDir.resolve("libs")
+                        .takeIf { it.exists() }
+                        ?.let { dependencyLibs ->
+                            copy {
+                                from(dependencyLibs)
+                                into(libsDir)
+                            }
+                        }
+
+                    dependencyDir.resolve("jni")
+                        .takeIf { it.exists() }
+                        ?.let { dependencyJni ->
+                            copy {
+                                from(dependencyJni)
+                                into(workDir.resolve("jni"))
+                            }
+                        }
+                }
+            }
+        }
+
+        targetAar.parentFile.mkdirs()
+        zipDirectory(workDir, targetAar)
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy(bundleSelfContainedReleaseAar)
+}
+
+fun zipDirectory(sourceDir: File, targetFile: File) {
+    val addedEntries = mutableSetOf<String>()
+
+    ZipOutputStream(targetFile.outputStream().buffered()).use { output ->
+        sourceDir.walkTopDown()
+            .filter { it.isFile }
+            .sortedBy { it.relativeTo(sourceDir).invariantSeparatorsPath }
+            .forEach { file ->
+                val entryName = file.relativeTo(sourceDir).invariantSeparatorsPath
+
+                if (addedEntries.add(entryName)) {
+                    output.putNextEntry(ZipEntry(entryName))
+                    file.inputStream().buffered().use { input -> input.copyTo(output) }
+                    output.closeEntry()
+                }
+            }
     }
 }
