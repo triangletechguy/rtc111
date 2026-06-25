@@ -110,6 +110,18 @@ button:disabled {
   background: #264653;
 }
 
+.token-copy-row button:disabled {
+  background: #a9b2bd;
+}
+
+.token-status {
+  min-height: 18px;
+  margin: 10px 0 0;
+  color: #52606c;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
 @media (max-width: 760px) {
   .app-shell {
     padding: 18px;

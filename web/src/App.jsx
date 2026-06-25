@@ -8,6 +8,7 @@ export default function App() {
   const [appName, setAppName] = useState(DEFAULT_APP_NAME);
   const [accessToken, setAccessToken] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const appId = useMemo(() => toAppId(appName), [appName]);
   const tokenPreview = accessToken
@@ -24,6 +25,7 @@ export default function App() {
     }
 
     setIsGenerating(true);
+    setStatusMessage("");
 
     try {
       const response = await issueRtcToken({
@@ -34,9 +36,14 @@ export default function App() {
         permissions: ["join", "publish_audio", "publish_video", "chat", "signal"],
       });
 
-      setAccessToken(response.accessToken ?? response.token ?? "");
+      const nextToken = response.accessToken ?? response.token ?? "";
+      setAccessToken(nextToken);
+      setStatusMessage(nextToken ? "Token generated." : "No token returned.");
     } catch (event) {
-      console.error(getErrorMessage(event));
+      const message = getErrorMessage(event);
+      console.error(message);
+      setAccessToken("");
+      setStatusMessage(message);
     } finally {
       setIsGenerating(false);
     }
@@ -47,7 +54,13 @@ export default function App() {
       return;
     }
 
-    await navigator.clipboard?.writeText(accessToken);
+    try {
+      await writeClipboardText(accessToken);
+      setStatusMessage("Token copied.");
+    } catch (event) {
+      console.error(getErrorMessage(event));
+      setStatusMessage("Copy failed. Select the token text manually.");
+    }
   }
 
   return (
@@ -74,9 +87,12 @@ export default function App() {
           <div className="token-copy-row">
             <code>{tokenPreview}</code>
             <button type="button" onClick={copyToken} disabled={!accessToken}>
-              Copy token
+              {statusMessage === "Token copied." ? "Copied" : "Copy token"}
             </button>
           </div>
+          <p className="token-status" role="status" aria-live="polite">
+            {statusMessage}
+          </p>
         </div>
       </section>
     </main>
@@ -95,4 +111,33 @@ function toAppId(value) {
 
 function getErrorMessage(event) {
   return event instanceof Error ? event.message : "Something went wrong";
+}
+
+async function writeClipboardText(value) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.top = "0";
+  textArea.style.left = "-9999px";
+  textArea.style.opacity = "0";
+
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    const didCopy = document.execCommand("copy");
+
+    if (!didCopy) {
+      throw new Error("Clipboard copy was not accepted");
+    }
+  } finally {
+    document.body.removeChild(textArea);
+  }
 }

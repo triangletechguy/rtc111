@@ -1,6 +1,3 @@
-// packages/sdk/src/index.ts
-// Public SDK surface — Week 7-8: LiveKit replaces Agora
-
 export { getDatabase }          from './db/database';
 export { migrations }           from '../../migrations';
 export type { RtcClientConfig, RtcSessionInfo, RtcEventMap } from './rtc/RtcClient';

@@ -1,7 +1,3 @@
-// packages/sdk/src/rtc/useRtcClient.ts
-// React hook wrapping RtcClient — same public API as the Agora version.
-// UI components need zero changes.
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { RtcClient, RtcClientConfig, RtcSessionInfo } from './RtcClient';
 import { requestAudioPermissions } from './permissions';

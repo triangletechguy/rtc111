@@ -1,8 +1,3 @@
-// packages/sdk/src/rtc/RtcClient.ts
-// LiveKit-based RTC client — replaces react-native-agora entirely.
-// Wraps @livekit/react-native with the same public API as the old Agora client
-// so nothing in the UI needs to change.
-
 import {
   Room,
   RoomEvent,

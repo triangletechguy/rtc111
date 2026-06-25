@@ -134,6 +134,16 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, _res, next) => {
+  if (req.url === "/api") {
+    req.url = "/";
+  } else if (req.url.startsWith("/api/")) {
+    req.url = req.url.slice("/api".length);
+  }
+
+  next();
+});
+
 app.get("/", (_req, res) => {
   res.type("html").send(`
     <!doctype html>

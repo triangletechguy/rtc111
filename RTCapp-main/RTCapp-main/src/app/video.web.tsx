@@ -1,76 +1,61 @@
-import { useEffect } from "react";
+import React, { useState } from "react";
 
-const AGORA_APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
-const AGORA_CHANNEL = "main";
+const DEFAULT_CHANNEL = "main";
 
 export default function VideoWeb() {
-  useEffect(() => {
-    document.title = "Video Chat";
-    document.body.innerHTML = `
-      <div id="root2" style="background:#0a0a0a;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:sans-serif;">
-        <h1 style="color:#fff;margin:0">🌐 Web Video Chat</h1>
-        <p style="color:#888;margin:0">Channel: ${AGORA_CHANNEL}</p>
-        <p id="error" style="color:#ff4d4d;display:none"></p>
-        <div id="videos" style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center"></div>
-        <button id="joinBtn" style="background:#208AEF;color:#fff;border:none;padding:16px 48px;border-radius:12px;font-size:18px;cursor:pointer">Join Call</button>
+  const [channel, setChannel] = useState(DEFAULT_CHANNEL);
+  const [joined, setJoined] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [cameraOn, setCameraOn] = useState(true);
+
+  if (joined) {
+    return (
+      <div style={{ background: "#0a0a0a", minHeight: "100vh", color: "#fff", fontFamily: "sans-serif", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "#111" }}>
+          <span style={{ background: "#208AEF", borderRadius: 999, padding: "5px 10px", fontSize: 11, fontWeight: 800 }}>PREVIEW</span>
+          <span style={{ flex: 1, fontSize: 14 }}>#{channel}</span>
+          <button onClick={() => setJoined(false)} style={{ background: "#e53935", color: "#fff", border: "none", borderRadius: 999, padding: "8px 16px", fontWeight: 700, cursor: "pointer" }}>
+            End
+          </button>
+        </div>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", padding: 24 }}>
+          <div style={{ width: "min(720px, 100%)", aspectRatio: "16 / 9", borderRadius: 18, background: "linear-gradient(135deg,#121212,#242a36)", border: "1px solid #333", display: "grid", placeItems: "center" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 56, marginBottom: 12 }}>{cameraOn ? "📹" : "📷"}</div>
+              <div style={{ color: "#d8d8d8", fontSize: 18, fontWeight: 700 }}>Video preview surface</div>
+              <div style={{ color: "#888", marginTop: 6 }}>Controls are UI-only in this build.</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 16, padding: "18px 16px", background: "#111" }}>
+          <button onClick={() => setMuted((value) => !value)} style={controlStyle}>{muted ? "Unmute" : "Mute"}</button>
+          <button onClick={() => setCameraOn((value) => !value)} style={controlStyle}>{cameraOn ? "Camera Off" : "Camera On"}</button>
+        </div>
       </div>
-    `;
+    );
+  }
 
-    const script = document.createElement("script");
-    script.src = "https://download.agora.io/sdk/release/AgoraRTC_N-4.20.2.js";
-    script.onload = () => {
-      const AgoraRTC = (window as any).AgoraRTC;
-      const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-
-      document.getElementById("joinBtn")!.onclick = async () => {
-        try {
-          document.getElementById("joinBtn")!.textContent = "Joining...";
-
-          client.on("user-published", async (user: any, mediaType: any) => {
-            await client.subscribe(user, mediaType);
-            if (mediaType === "video") {
-              const div = document.createElement("div");
-              div.id = `remote-${user.uid}`;
-              div.style.cssText = "width:320px;height:240px;background:#1a1a1a;border-radius:12px;overflow:hidden";
-              document.getElementById("videos")!.appendChild(div);
-              user.videoTrack.play(`remote-${user.uid}`);
-            }
-            if (mediaType === "audio") user.audioTrack.play();
-          });
-
-          client.on("user-unpublished", (user: any) => {
-            document.getElementById(`remote-${user.uid}`)?.remove();
-          });
-
-          await client.join("${AGORA_APP_ID}", "${AGORA_CHANNEL}", null, null);
-          const [audioTrack, videoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
-          await client.publish([audioTrack, videoTrack]);
-
-          const localDiv = document.createElement("div");
-          localDiv.id = "local";
-          localDiv.style.cssText = "width:320px;height:240px;background:#1a1a1a;border-radius:12px;overflow:hidden";
-          document.getElementById("videos")!.appendChild(localDiv);
-          videoTrack.play("local");
-
-          const btn = document.getElementById("joinBtn")!;
-          btn.textContent = "End Call";
-          btn.style.background = "#e53935";
-          btn.onclick = async () => {
-            videoTrack.close();
-            audioTrack.close();
-            await client.leave();
-            window.location.reload();
-          };
-        } catch (e: any) {
-          const err = document.getElementById("error")!;
-          err.style.display = "block";
-          err.textContent = e.message;
-          document.getElementById("joinBtn")!.textContent = "Join Call";
-        }
-      };
-    };
-    document.head.appendChild(script);
-  }, []);
-
-  return null;
+  return (
+    <div style={{ background: "#f4f7fb", minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: "sans-serif", padding: 24 }}>
+      <div style={{ width: "min(520px, 100%)", background: "#fff", border: "1px solid #d8e0ea", borderRadius: 14, padding: 24, boxShadow: "0 18px 45px rgba(15,23,42,0.12)" }}>
+        <h1 style={{ margin: "0 0 8px", color: "#152033" }}>Web Video Chat</h1>
+        <p style={{ margin: "0 0 20px", color: "#607086" }}>UI preview with local controls only.</p>
+        <label style={{ color: "#344256", fontSize: 13, fontWeight: 700 }}>Channel</label>
+        <input value={channel} onChange={(event) => setChannel(event.target.value)} style={{ width: "100%", boxSizing: "border-box", marginTop: 6, marginBottom: 16, border: "1px solid #c9d3df", borderRadius: 10, padding: "12px 14px", fontSize: 16 }} />
+        <button onClick={() => setJoined(true)} disabled={!channel.trim()} style={{ width: "100%", border: "none", borderRadius: 10, padding: "14px 16px", background: "#208AEF", color: "#fff", fontSize: 16, fontWeight: 800, cursor: channel.trim() ? "pointer" : "not-allowed", opacity: channel.trim() ? 1 : 0.55 }}>
+          Open Preview
+        </button>
+      </div>
+    </div>
+  );
 }
+
+const controlStyle = {
+  background: "#242424",
+  color: "#fff",
+  border: "none",
+  borderRadius: 10,
+  padding: "12px 18px",
+  fontWeight: 700,
+  cursor: "pointer",
+};
