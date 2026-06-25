@@ -13,6 +13,7 @@
 }
 
 .dashboard-header,
+.admin-tabs,
 .token-panel,
 .usage-summary,
 .token-output,
@@ -104,6 +105,51 @@
 
 .connection-indicator.offline span {
   background: #be123c;
+}
+
+.admin-tabs {
+  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-tabs button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #52606c;
+  font-size: 0.94rem;
+  font-weight: 900;
+}
+
+.admin-tabs button:hover,
+.admin-tabs button:focus-visible {
+  border-color: #c8d1dc;
+  background: #f8fafc;
+  outline: none;
+}
+
+.admin-tabs button.active {
+  border-color: #264653;
+  background: #264653;
+  color: #fff;
+}
+
+.tab-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.tab-panel[hidden] {
+  display: none;
+}
+
+.token-stack,
+.package-stack {
+  min-width: 0;
 }
 
 .dashboard-grid {

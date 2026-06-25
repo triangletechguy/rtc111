@@ -15,6 +15,7 @@ export default function App() {
   const [billingStatus, setBillingStatus] = useState("");
   const [isBillingLoading, setIsBillingLoading] = useState(false);
   const [rtcConnectionStatus, setRtcConnectionStatus] = useState("idle");
+  const [activeTab, setActiveTab] = useState("token");
 
   const appId = useMemo(() => toAppId(appName), [appName]);
   const billingTotals = useMemo(() => getBillingTotals(billingRows), [billingRows]);
@@ -117,7 +118,38 @@ export default function App() {
           </div>
         </header>
 
-        <div className="dashboard-grid">
+        <div className="admin-tabs" role="tablist" aria-label="Admin sections">
+          <button
+            id="token-tab"
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "token"}
+            aria-controls="token-panel"
+            className={activeTab === "token" ? "active" : ""}
+            onClick={() => setActiveTab("token")}
+          >
+            Token
+          </button>
+          <button
+            id="package-tab"
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "package"}
+            aria-controls="package-panel"
+            className={activeTab === "package" ? "active" : ""}
+            onClick={() => setActiveTab("package")}
+          >
+            Package
+          </button>
+        </div>
+
+        <section
+          id="token-panel"
+          className="tab-panel token-stack"
+          role="tabpanel"
+          aria-labelledby="token-tab"
+          hidden={activeTab !== "token"}
+        >
           <form className="token-panel" onSubmit={generateToken}>
             <div className="field-group">
               <label htmlFor="app-name">App name</label>
@@ -135,6 +167,26 @@ export default function App() {
             </button>
           </form>
 
+          <div className="token-output" aria-label="Generated access token">
+            <div className="token-copy-row">
+              <code>{tokenPreview}</code>
+              <button type="button" onClick={copyToken} disabled={!accessToken}>
+                {statusMessage === "Token copied." ? "Copied" : "Copy token"}
+              </button>
+            </div>
+            <p className="token-status" role="status" aria-live="polite">
+              {statusMessage}
+            </p>
+          </div>
+        </section>
+
+        <section
+          id="package-panel"
+          className="tab-panel package-stack"
+          role="tabpanel"
+          aria-labelledby="package-tab"
+          hidden={activeTab !== "package"}
+        >
           <section className="usage-summary" aria-label="Usage summary">
             <dl>
               <div>
@@ -151,74 +203,62 @@ export default function App() {
               </div>
             </dl>
           </section>
-        </div>
 
-        <div className="token-output" aria-label="Generated access token">
-          <div className="token-copy-row">
-            <code>{tokenPreview}</code>
-            <button type="button" onClick={copyToken} disabled={!accessToken}>
-              {statusMessage === "Token copied." ? "Copied" : "Copy token"}
-            </button>
-          </div>
-          <p className="token-status" role="status" aria-live="polite">
-            {statusMessage}
-          </p>
-        </div>
-
-        <section className="billing-panel" aria-label="Company billing">
-          <div className="panel-header">
-            <div>
-              <h2>Company Minute Billing</h2>
-              <p>
-                Rate: {formatCurrency(billingRate)} per minute. No payment gateway is connected.
-              </p>
+          <section className="billing-panel" aria-label="Company billing">
+            <div className="panel-header">
+              <div>
+                <h2>Company Minute Billing</h2>
+                <p>
+                  Rate: {formatCurrency(billingRate)} per minute. No payment gateway is connected.
+                </p>
+              </div>
+              <button className="secondary-button" type="button" onClick={loadBilling} disabled={isBillingLoading}>
+                {isBillingLoading ? "Refreshing" : "Refresh"}
+              </button>
             </div>
-            <button className="secondary-button" type="button" onClick={loadBilling} disabled={isBillingLoading}>
-              {isBillingLoading ? "Refreshing" : "Refresh"}
-            </button>
-          </div>
 
-          <div className="billing-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Company</th>
-                  <th>Used min</th>
-                  <th>Billable min</th>
-                  <th>Active</th>
-                  <th>Sessions</th>
-                  <th>Est. bill</th>
-                </tr>
-              </thead>
-              <tbody>
-                {billingRows.length ? (
-                  billingRows.map((row) => (
-                    <tr key={row.appId ?? row.app_id}>
-                      <td>
-                        <strong>{row.companyName ?? row.company_name}</strong>
-                        <span>{row.appId ?? row.app_id}</span>
-                      </td>
-                      <td>{formatMinutes(readNumber(row.usedMinutes ?? row.used_minutes))}</td>
-                      <td>{formatNumber(readNumber(row.billableMinutes ?? row.billable_minutes))}</td>
-                      <td>{formatNumber(readNumber(row.activeSessions ?? row.active_sessions))}</td>
-                      <td>{formatNumber(readNumber(row.totalSessions ?? row.total_sessions))}</td>
-                      <td>{formatCurrency(readNumber(row.estimatedAmount ?? row.estimated_amount))}</td>
-                    </tr>
-                  ))
-                ) : (
+            <div className="billing-table-wrap">
+              <table>
+                <thead>
                   <tr>
-                    <td className="empty-cell" colSpan={6}>
-                      No RTC usage recorded yet.
-                    </td>
+                    <th>Company</th>
+                    <th>Used min</th>
+                    <th>Billable min</th>
+                    <th>Active</th>
+                    <th>Sessions</th>
+                    <th>Est. bill</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {billingRows.length ? (
+                    billingRows.map((row) => (
+                      <tr key={row.appId ?? row.app_id}>
+                        <td>
+                          <strong>{row.companyName ?? row.company_name}</strong>
+                          <span>{row.appId ?? row.app_id}</span>
+                        </td>
+                        <td>{formatMinutes(readNumber(row.usedMinutes ?? row.used_minutes))}</td>
+                        <td>{formatNumber(readNumber(row.billableMinutes ?? row.billable_minutes))}</td>
+                        <td>{formatNumber(readNumber(row.activeSessions ?? row.active_sessions))}</td>
+                        <td>{formatNumber(readNumber(row.totalSessions ?? row.total_sessions))}</td>
+                        <td>{formatCurrency(readNumber(row.estimatedAmount ?? row.estimated_amount))}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="empty-cell" colSpan={6}>
+                        No RTC usage recorded yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-          <p className="billing-status" role="status" aria-live="polite">
-            {billingStatus || formatGeneratedAt(billingGeneratedAt)}
-          </p>
+            <p className="billing-status" role="status" aria-live="polite">
+              {billingStatus || formatGeneratedAt(billingGeneratedAt)}
+            </p>
+          </section>
         </section>
       </section>
     </main>
