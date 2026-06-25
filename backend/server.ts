@@ -13,7 +13,9 @@ const RTC_TOKEN_ISSUER = "rtc-platform";
 const RTC_TOKEN_SECRET = process.env.RTC_TOKEN_SECRET ?? "rtc-dev-secret-change-me";
 const RTC_TOKEN_EXPIRES_IN: SignOptions["expiresIn"] = "1h";
 const RTC_API_KEY = process.env.RTC_API_KEY ?? "rtc-dev-api-key";
+const RTC_ADMIN_KEY = process.env.RTC_ADMIN_KEY ?? "rtc-admin-dev-key";
 const DEFAULT_ROOM_CAPACITY = Number(process.env.RTC_DEFAULT_ROOM_CAPACITY ?? 8);
+const DEFAULT_CLIENT_APP_ID = "local-rtc-client";
 
 type RtcPermission =
   | "join"
@@ -27,6 +29,7 @@ type RtcPermission =
 
 type RtcAccessToken = JwtPayload & {
   scope: "rtc";
+  appId: string;
   userId: string;
   externalUserId?: string;
   roomId?: string;
@@ -35,7 +38,28 @@ type RtcAccessToken = JwtPayload & {
   permissions: RtcPermission[];
 };
 
+type ClientApp = {
+  id: string;
+  name: string;
+  packageName?: string;
+  allowedOrigins: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type StoredApiKey = {
+  id: string;
+  appId: string;
+  secret: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+};
+
 type ExternalUser = {
+  appId: string;
   externalUserId: string;
   name: string;
   email: string;
@@ -47,6 +71,7 @@ type ExternalUser = {
 };
 
 type RoomRecord = {
+  appId: string;
   id: string;
   name: string;
   roomType: string;
@@ -62,6 +87,7 @@ type RoomRecord = {
 
 type SessionRecord = {
   id: string;
+  appId: string;
   roomId: string;
   userId: string;
   externalUserId?: string;
@@ -77,6 +103,8 @@ type SessionRecord = {
 
 type ParticipantState = {
   socketId: string;
+  appId: string;
+  roomId: string;
   userId: string;
   externalUserId?: string;
   role: string;
@@ -92,6 +120,7 @@ type ParticipantState = {
 type StoredRtcToken = {
   token: string;
   tokenId: string;
+  appId: string;
   userId: string;
   externalUserId?: string;
   roomId?: string;
@@ -104,6 +133,13 @@ type StoredRtcToken = {
   lastUsedAt?: string;
 };
 
+type ClientAuthedRequest = Request & {
+  clientApp?: ClientApp;
+  clientApiKey?: StoredApiKey;
+};
+
+const clientApps = new Map<string, ClientApp>();
+const apiKeysBySecret = new Map<string, StoredApiKey>();
 const users = new Map<string, ExternalUser>();
 const rooms = new Map<string, RoomRecord>();
 const sessions = new Map<string, SessionRecord>();
@@ -120,6 +156,8 @@ const roomParticipants = new Map<string, Map<string, ParticipantState>>();
 const issuedRtcTokens = new Map<string, StoredRtcToken>();
 
 let nextRoomId = 1;
+
+bootstrapDefaultClientApp();
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -193,6 +231,7 @@ app.get("/", (_req, res) => {
           <h1>RTC Backend is running</h1>
           <p>Socket.IO signaling is listening on <code>localhost:${PORT}</code>.</p>
           <p>Health check: <code>/health</code></p>
+          <p>Admin API: <code>/admin/apps</code></p>
           <p>Compatibility token endpoint: <code>POST /rtc-token</code></p>
           <p>Client API: <code>/client/me</code>, <code>/client/users/sync</code>, <code>/client/rooms</code>, <code>/client/rtc/token</code>, <code>/client/rtc/session/start</code>, <code>/client/rtc/session/end</code></p>
         </main>
@@ -206,6 +245,8 @@ app.get("/health", (_req, res) => {
 
   res.json({
     status: "ok",
+    clientApps: clientApps.size,
+    activeApiKeys: Array.from(apiKeysBySecret.values()).filter((apiKey) => !apiKey.revokedAt).length,
     rooms: rooms.size,
     users: users.size,
     issuedTokens: issuedRtcTokens.size,
@@ -215,6 +256,104 @@ app.get("/health", (_req, res) => {
       (count, participants) => count + participants.size,
       0,
     ),
+  });
+});
+
+app.get("/admin/apps", requireAdminAuth, (_req, res) => {
+  res.json({
+    apps: Array.from(clientApps.values()).map(serializeClientApp),
+  });
+});
+
+app.post("/admin/apps", requireAdminAuth, (req, res) => {
+  const name = readString(req.body?.name) || readString(req.body?.app_name);
+
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+
+  const requestedAppId = readString(req.body?.app_id) || readString(req.body?.appId);
+  const packageName = readString(req.body?.package_name) || readString(req.body?.packageName);
+  const allowedOrigins = readStringArray(req.body?.allowed_origins ?? req.body?.allowedOrigins);
+  const metadata = readRecord(req.body?.metadata) ?? {};
+  const keyLabel = readString(req.body?.key_label) || readString(req.body?.keyLabel) || "Default API key";
+  const appId = createUniqueAppId(requestedAppId || name);
+  const { app: clientApp, apiKey } = createClientApp({
+    id: appId,
+    name,
+    packageName,
+    allowedOrigins,
+    metadata,
+    keyLabel,
+  });
+
+  res.status(201).json({
+    app: serializeClientApp(clientApp),
+    apiKey: serializeApiKey(apiKey, true),
+    api_key: apiKey.secret,
+    integration: {
+      apiBaseUrl: `http://localhost:${PORT}`,
+      api_base_url: `http://localhost:${PORT}`,
+      authorizationHeader: `Bearer ${apiKey.secret}`,
+      authorization_header: `Bearer ${apiKey.secret}`,
+    },
+  });
+});
+
+app.get("/admin/apps/:appId", requireAdminAuth, (req, res) => {
+  const appId = readString(req.params.appId);
+  const clientApp = clientApps.get(appId);
+
+  if (!clientApp) {
+    res.status(404).json({ error: "Client app not found" });
+    return;
+  }
+
+  res.json({
+    app: serializeClientApp(clientApp),
+    apiKeys: Array.from(apiKeysBySecret.values())
+      .filter((apiKey) => apiKey.appId === appId)
+      .map((apiKey) => serializeApiKey(apiKey)),
+  });
+});
+
+app.post("/admin/apps/:appId/keys", requireAdminAuth, (req, res) => {
+  const appId = readString(req.params.appId);
+  const clientApp = clientApps.get(appId);
+
+  if (!clientApp) {
+    res.status(404).json({ error: "Client app not found" });
+    return;
+  }
+
+  const apiKey = createApiKey({
+    appId,
+    label: readString(req.body?.label) || readString(req.body?.key_label) || "API key",
+  });
+
+  res.status(201).json({
+    app: serializeClientApp(clientApp),
+    apiKey: serializeApiKey(apiKey, true),
+    api_key: apiKey.secret,
+  });
+});
+
+app.post("/admin/apps/:appId/keys/:keyId/revoke", requireAdminAuth, (req, res) => {
+  const appId = readString(req.params.appId);
+  const keyId = readString(req.params.keyId);
+  const apiKey = findApiKeyById(appId, keyId);
+
+  if (!apiKey) {
+    res.status(404).json({ revoked: false, error: "API key not found" });
+    return;
+  }
+
+  apiKey.revokedAt = new Date().toISOString();
+
+  res.json({
+    revoked: true,
+    apiKey: serializeApiKey(apiKey),
   });
 });
 
@@ -231,20 +370,23 @@ app.post("/rtc-token", (req, res) => {
     "signal",
   ]);
 
-  ensureRoom(roomId, {
+  ensureRoom(DEFAULT_CLIENT_APP_ID, roomId, {
     name: `Room ${roomId}`,
     roomType: rtcMode,
     maxParticipants: DEFAULT_ROOM_CAPACITY,
     maxMicCount: DEFAULT_ROOM_CAPACITY,
   });
 
-  res.json(issueToken({ roomId, userId, role, rtcMode, permissions }));
+  res.json(issueToken({ appId: DEFAULT_CLIENT_APP_ID, roomId, userId, role, rtcMode, permissions }));
 });
 
-app.get("/client/me", requireClientAuth, (_req, res) => {
+app.get("/client/me", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
+
   res.json({
-    id: "local-rtc-client",
-    name: "RTC Platform Client",
+    app: serializeClientApp(clientApp),
+    id: clientApp.id,
+    name: clientApp.name,
     environment: process.env.NODE_ENV ?? "development",
     tokenIssuer: RTC_TOKEN_ISSUER,
     capabilities: [
@@ -262,6 +404,7 @@ app.get("/client/me", requireClientAuth, (_req, res) => {
 });
 
 app.post("/client/users/sync", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
 
   if (!externalUserId) {
@@ -270,8 +413,9 @@ app.post("/client/users/sync", requireClientAuth, (req, res) => {
   }
 
   const now = new Date().toISOString();
-  const existing = users.get(externalUserId);
+  const existing = users.get(scopedKey(clientApp.id, externalUserId));
   const user: ExternalUser = {
+    appId: clientApp.id,
     externalUserId,
     name: readString(req.body?.name) || existing?.name || externalUserId,
     email: readString(req.body?.email) || existing?.email || "",
@@ -282,20 +426,25 @@ app.post("/client/users/sync", requireClientAuth, (req, res) => {
     updatedAt: now,
   };
 
-  users.set(externalUserId, user);
+  users.set(scopedKey(clientApp.id, externalUserId), user);
   res.status(existing ? 200 : 201).json({ user });
 });
 
-app.get("/client/rooms", requireClientAuth, (_req, res) => {
+app.get("/client/rooms", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
+
   res.json({
-    rooms: Array.from(rooms.values()).map(serializeRoom),
+    rooms: Array.from(rooms.values())
+      .filter((room) => room.appId === clientApp.id)
+      .map(serializeRoom),
   });
 });
 
 app.post("/client/rooms", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId) || String(nextRoomId++);
-  const room = ensureRoom(roomId, {
+  const room = ensureRoom(clientApp.id, roomId, {
     name: readString(req.body?.name) || `Room ${roomId}`,
     roomType: readString(req.body?.room_type) || readString(req.body?.roomType) || "voice",
     privacyType: readString(req.body?.privacy_type) || readString(req.body?.privacyType) || "public",
@@ -319,8 +468,9 @@ app.post("/client/rooms", requireClientAuth, (req, res) => {
 });
 
 app.get("/client/rooms/:roomId", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const roomId = readString(req.params.roomId);
-  const room = rooms.get(roomId);
+  const room = rooms.get(scopedKey(clientApp.id, roomId));
 
   if (!room) {
     res.status(404).json({ error: "Room not found" });
@@ -329,11 +479,12 @@ app.get("/client/rooms/:roomId", requireClientAuth, (req, res) => {
 
   res.json({
     room: serializeRoom(room),
-    state: getRoomState(room.id),
+    state: getRoomState(clientApp.id, room.id),
   });
 });
 
 app.post("/client/rtc/token", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const appName = readString(req.body?.app_name) || readString(req.body?.appName);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId) || appName;
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
@@ -343,10 +494,10 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
     return;
   }
 
-  ensureExternalUser(externalUserId);
+  ensureExternalUser(clientApp.id, externalUserId);
 
   if (roomId) {
-    ensureRoom(roomId);
+    ensureRoom(clientApp.id, roomId);
   }
 
   const role = readString(req.body?.role) || "publisher";
@@ -360,6 +511,7 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
   ]);
 
   res.json(issueToken({
+    appId: clientApp.id,
     ...(roomId ? { roomId } : {}),
     userId: externalUserId,
     externalUserId,
@@ -370,6 +522,7 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
 });
 
 app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
 
@@ -383,8 +536,8 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
     return;
   }
 
-  ensureExternalUser(externalUserId);
-  ensureRoom(roomId);
+  ensureExternalUser(clientApp.id, externalUserId);
+  ensureRoom(clientApp.id, roomId);
 
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtc_mode) || readString(req.body?.rtcMode) || "voice";
@@ -399,6 +552,7 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
   ]);
 
   const session = startSession({
+    appId: clientApp.id,
     roomId,
     userId: externalUserId,
     externalUserId,
@@ -413,6 +567,7 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
   res.status(201).json({
     session,
     ...issueToken({
+      appId: clientApp.id,
       roomId,
       userId: externalUserId,
       externalUserId,
@@ -424,6 +579,7 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
 });
 
 app.post("/client/rtc/session/end", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
 
@@ -432,7 +588,7 @@ app.post("/client/rtc/session/end", requireClientAuth, (req, res) => {
     return;
   }
 
-  const session = endSession(roomId, externalUserId);
+  const session = endSession(clientApp.id, roomId, externalUserId);
   res.json({ ended: Boolean(session), session });
 });
 
@@ -440,11 +596,15 @@ app.post("/client/rtc/session/end", requireClientAuth, (req, res) => {
  * Admin/dashboard helper:
  * List generated tokens that backend currently saved.
  */
-app.get("/client/rtc/tokens", requireClientAuth, (_req, res) => {
+app.get("/client/rtc/tokens", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
+
   cleanupExpiredTokens();
 
   res.json({
-    tokens: Array.from(issuedRtcTokens.values()).map(serializeStoredToken),
+    tokens: Array.from(issuedRtcTokens.values())
+      .filter((token) => token.appId === clientApp.id)
+      .map(serializeStoredToken),
   });
 });
 
@@ -453,6 +613,7 @@ app.get("/client/rtc/tokens", requireClientAuth, (_req, res) => {
  * Verify whether a client token is the exact saved backend token.
  */
 app.post("/client/rtc/token/verify", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const token = readString(req.body?.token) || getBearerToken(req.header("authorization"));
 
   if (!token) {
@@ -465,9 +626,19 @@ app.post("/client/rtc/token/verify", requireClientAuth, (req, res) => {
 
   try {
     const decoded = verifyRtcToken(token);
+    const storedToken = issuedRtcTokens.get(token)!;
+
+    if (storedToken.appId !== clientApp.id) {
+      res.status(403).json({
+        valid: false,
+        error: "RTC token belongs to another client app",
+      });
+      return;
+    }
+
     res.json({
       valid: true,
-      token: serializeStoredToken(issuedRtcTokens.get(token)!),
+      token: serializeStoredToken(storedToken),
       decoded,
     });
   } catch (error) {
@@ -483,6 +654,7 @@ app.post("/client/rtc/token/verify", requireClientAuth, (req, res) => {
  * Revoke generated token so SDK/client can no longer connect.
  */
 app.post("/client/rtc/token/revoke", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
   const token = readString(req.body?.token);
 
   if (!token) {
@@ -492,7 +664,7 @@ app.post("/client/rtc/token/revoke", requireClientAuth, (req, res) => {
 
   const storedToken = issuedRtcTokens.get(token);
 
-  if (!storedToken) {
+  if (!storedToken || storedToken.appId !== clientApp.id) {
     res.status(404).json({ revoked: false, error: "Token was not found in backend" });
     return;
   }
@@ -525,6 +697,7 @@ io.use((socket, next) => {
     const decoded = verifyRtcToken(token);
 
     socket.data.accessToken = token;
+    socket.data.appId = decoded.appId;
     socket.data.userId = decoded.userId;
     socket.data.externalUserId = decoded.externalUserId;
     socket.data.tokenRoomId = decoded.roomId;
@@ -538,9 +711,10 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id, socket.data.userId);
+  console.log("User connected:", socket.id, socket.data.appId, socket.data.userId);
 
   socket.on("room:join", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
     const roomId = readString(payload.roomId);
 
     if (!roomId) {
@@ -560,14 +734,14 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const room = ensureRoom(roomId);
+    const room = ensureRoom(appId, roomId);
     const previousRoomId = socket.data.roomId as string | undefined;
 
     if (previousRoomId && previousRoomId !== roomId) {
       leaveCurrentRoom(socket, "joined-another-room");
     }
 
-    const participants = getParticipants(roomId);
+    const participants = getParticipants(appId, roomId);
 
     if (!participants.has(socket.id) && participants.size >= room.maxParticipants) {
       socket.emit("room:full", {
@@ -580,6 +754,8 @@ io.on("connection", (socket) => {
 
     const participant: ParticipantState = {
       socketId: socket.id,
+      appId,
+      roomId,
       userId: socket.data.userId as string,
       externalUserId: socket.data.externalUserId as string | undefined,
       role: (socket.data.role as string | undefined) ?? "publisher",
@@ -593,10 +769,11 @@ io.on("connection", (socket) => {
     };
 
     participants.set(socket.id, participant);
-    socket.join(roomId);
+    socket.join(roomChannel(appId, roomId));
     socket.data.roomId = roomId;
 
     startSession({
+      appId,
       roomId,
       userId: participant.userId,
       externalUserId: participant.externalUserId,
@@ -611,7 +788,7 @@ io.on("connection", (socket) => {
     socket.emit("room:joined", {
       room: serializeRoom(room),
       participant: serializeParticipant(participant),
-      state: getRoomState(roomId),
+      state: getRoomState(appId, roomId),
     });
 
     socket.emit(
@@ -619,9 +796,9 @@ io.on("connection", (socket) => {
       Array.from(participants.keys()).filter((socketId) => socketId !== socket.id),
     );
 
-    socket.to(roomId).emit("user-joined", socket.id);
-    socket.to(roomId).emit("participant:joined", serializeParticipant(participant));
-    io.to(roomId).emit("room:state", getRoomState(roomId));
+    socket.to(roomChannel(appId, roomId)).emit("user-joined", socket.id);
+    socket.to(roomChannel(appId, roomId)).emit("participant:joined", serializeParticipant(participant));
+    io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
   });
 
   socket.on("room:leave", () => {
@@ -629,6 +806,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("media:state", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
     const roomId = socket.data.roomId as string | undefined;
 
     if (!roomId) {
@@ -636,7 +814,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const participants = getParticipants(roomId);
+    const participants = getParticipants(appId, roomId);
     const participant = participants.get(socket.id);
 
     if (!participant) {
@@ -648,7 +826,9 @@ io.on("connection", (socket) => {
     participant.speakerEnabled = readBoolean(payload.speakerEnabled, participant.speakerEnabled);
     participant.lastSeenAt = new Date().toISOString();
 
-    const sessionId = activeSessionByUserRoom.get(sessionKey(roomId, participant.externalUserId ?? participant.userId));
+    const sessionId = activeSessionByUserRoom.get(
+      sessionKey(appId, roomId, participant.externalUserId ?? participant.userId),
+    );
     const session = sessionId ? sessions.get(sessionId) : undefined;
 
     if (session && !session.endedAt) {
@@ -657,8 +837,8 @@ io.on("connection", (socket) => {
       session.speakerEnabled = participant.speakerEnabled;
     }
 
-    io.to(roomId).emit("participant:updated", serializeParticipant(participant));
-    io.to(roomId).emit("room:state", getRoomState(roomId));
+    io.to(roomChannel(appId, roomId)).emit("participant:updated", serializeParticipant(participant));
+    io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
   });
 
   socket.on("signal", ({ to, data }: { to?: string; data?: unknown } = {}) => {
@@ -666,10 +846,11 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const fromAppId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
     const fromRoomId = socket.data.roomId as string | undefined;
-    const targetRoomId = findParticipantRoom(to);
+    const targetRoom = findParticipantRoom(to);
 
-    if (!fromRoomId || targetRoomId !== fromRoomId) {
+    if (!fromRoomId || targetRoom?.appId !== fromAppId || targetRoom.roomId !== fromRoomId) {
       socket.emit("signal:error", { message: "Target peer is not in the same room" });
       return;
     }
@@ -690,14 +871,13 @@ server.listen(PORT, HOST, () => {
   console.log(`Open backend status at http://localhost:${PORT}`);
 });
 
-function requireClientAuth(req: Request, res: Response, next: NextFunction) {
-  const authorization = req.header("authorization") ?? "";
-  const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+  const token = getBearerToken(req.header("authorization"));
 
-  if (!token || token !== RTC_API_KEY) {
+  if (!token || token !== RTC_ADMIN_KEY) {
     res.status(401).json({
-      error: "Valid client API key is required",
-      hint: "Set Authorization: Bearer <RTC_API_KEY>. The local dev default is rtc-dev-api-key.",
+      error: "Valid admin API key is required",
+      hint: "Set Authorization: Bearer <RTC_ADMIN_KEY>. The local dev default is rtc-admin-dev-key.",
     });
     return;
   }
@@ -705,7 +885,125 @@ function requireClientAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function requireClientAuth(req: Request, res: Response, next: NextFunction) {
+  const token = getBearerToken(req.header("authorization"));
+  const apiKey = token ? apiKeysBySecret.get(token) : undefined;
+
+  if (!apiKey || apiKey.revokedAt) {
+    res.status(401).json({
+      error: "Valid client API key is required",
+      hint: "Set Authorization: Bearer <client_api_key>. The local dev default is rtc-dev-api-key.",
+    });
+    return;
+  }
+
+  const clientApp = clientApps.get(apiKey.appId);
+
+  if (!clientApp) {
+    res.status(401).json({
+      error: "Client app for this API key was not found",
+    });
+    return;
+  }
+
+  apiKey.lastUsedAt = new Date().toISOString();
+  (req as ClientAuthedRequest).clientApp = clientApp;
+  (req as ClientAuthedRequest).clientApiKey = apiKey;
+  next();
+}
+
+function getClientApp(req: Request) {
+  return (req as ClientAuthedRequest).clientApp ?? clientApps.get(DEFAULT_CLIENT_APP_ID)!;
+}
+
+function bootstrapDefaultClientApp() {
+  if (clientApps.has(DEFAULT_CLIENT_APP_ID)) {
+    return;
+  }
+
+  createClientApp({
+    id: DEFAULT_CLIENT_APP_ID,
+    name: "RTC Platform Client",
+    packageName: "local.dev",
+    allowedOrigins: ["*"],
+    metadata: { environment: "development" },
+    keyLabel: "Local development API key",
+    apiKey: RTC_API_KEY,
+  });
+}
+
+function createClientApp({
+  id,
+  name,
+  packageName,
+  allowedOrigins = [],
+  metadata = {},
+  keyLabel = "Default API key",
+  apiKey,
+}: {
+  id: string;
+  name: string;
+  packageName?: string;
+  allowedOrigins?: string[];
+  metadata?: Record<string, unknown>;
+  keyLabel?: string;
+  apiKey?: string;
+}) {
+  const now = new Date().toISOString();
+  const appRecord: ClientApp = {
+    id,
+    name,
+    ...(packageName ? { packageName } : {}),
+    allowedOrigins,
+    metadata,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  clientApps.set(id, appRecord);
+
+  const keyRecord = createApiKey({
+    appId: id,
+    label: keyLabel,
+    secret: apiKey,
+  });
+
+  return { app: appRecord, apiKey: keyRecord };
+}
+
+function createApiKey({
+  appId,
+  label,
+  secret,
+}: {
+  appId: string;
+  label: string;
+  secret?: string;
+}) {
+  const keyRecord: StoredApiKey = {
+    id: `key_${randomUUID()}`,
+    appId,
+    secret: secret || createClientApiKeySecret(),
+    label,
+    createdAt: new Date().toISOString(),
+  };
+
+  apiKeysBySecret.set(keyRecord.secret, keyRecord);
+  return keyRecord;
+}
+
+function findApiKeyById(appId: string, keyId: string) {
+  return Array.from(apiKeysBySecret.values()).find(
+    (apiKey) => apiKey.appId === appId && apiKey.id === keyId,
+  );
+}
+
+function createClientApiKeySecret() {
+  return `rtc_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`;
+}
+
 function issueToken({
+  appId,
   roomId,
   userId,
   externalUserId,
@@ -713,6 +1011,7 @@ function issueToken({
   rtcMode,
   permissions,
 }: {
+  appId: string;
   roomId?: string;
   userId: string;
   externalUserId?: string;
@@ -724,6 +1023,7 @@ function issueToken({
 
   const payload: RtcAccessToken = {
     scope: "rtc",
+    appId,
     userId,
     ...(externalUserId ? { externalUserId } : {}),
     ...(roomId ? { roomId } : {}),
@@ -750,6 +1050,7 @@ function issueToken({
   const storedToken: StoredRtcToken = {
     token,
     tokenId,
+    appId,
     userId,
     externalUserId,
     ...(roomId ? { roomId } : {}),
@@ -774,6 +1075,8 @@ function issueToken({
     expires_in: RTC_TOKEN_EXPIRES_IN,
     expiresAt,
     expires_at: expiresAt,
+    appId,
+    app_id: appId,
     userId,
     user_id: userId,
     ...(externalUserId ? { externalUserId, external_user_id: externalUserId } : {}),
@@ -812,8 +1115,12 @@ function verifyRtcToken(token: string) {
     issuer: RTC_TOKEN_ISSUER,
   }) as RtcAccessToken;
 
-  if (decoded.scope !== "rtc" || typeof decoded.userId !== "string") {
+  if (decoded.scope !== "rtc" || typeof decoded.userId !== "string" || typeof decoded.appId !== "string") {
     throw new Error("Invalid RTC token payload");
+  }
+
+  if (decoded.appId !== storedToken.appId) {
+    throw new Error("RTC token client app does not match saved token");
   }
 
   if (decoded.jti && decoded.jti !== storedToken.tokenId) {
@@ -836,6 +1143,7 @@ function verifyRtcToken(token: string) {
 
   return {
     ...decoded,
+    appId: decoded.appId || storedToken.appId,
     role: readString(decoded.role) || storedToken.role || "publisher",
     rtcMode: readString(decoded.rtcMode) || storedToken.rtcMode || "video",
     permissions: readPermissions(decoded.permissions, storedToken.permissions),
@@ -904,6 +1212,8 @@ function serializeStoredToken(storedToken: StoredRtcToken) {
     token_id: storedToken.tokenId,
     tokenPreview: `${storedToken.token.slice(0, 24)}...${storedToken.token.slice(-12)}`,
     token_preview: `${storedToken.token.slice(0, 24)}...${storedToken.token.slice(-12)}`,
+    appId: storedToken.appId,
+    app_id: storedToken.appId,
     userId: storedToken.userId,
     user_id: storedToken.userId,
     externalUserId: storedToken.externalUserId,
@@ -926,13 +1236,84 @@ function serializeStoredToken(storedToken: StoredRtcToken) {
   };
 }
 
-function ensureExternalUser(externalUserId: string) {
-  if (users.has(externalUserId)) {
-    return users.get(externalUserId)!;
+function serializeClientApp(clientApp: ClientApp) {
+  return {
+    id: clientApp.id,
+    appId: clientApp.id,
+    app_id: clientApp.id,
+    name: clientApp.name,
+    packageName: clientApp.packageName,
+    package_name: clientApp.packageName,
+    allowedOrigins: clientApp.allowedOrigins,
+    allowed_origins: clientApp.allowedOrigins,
+    metadata: clientApp.metadata,
+    createdAt: clientApp.createdAt,
+    created_at: clientApp.createdAt,
+    updatedAt: clientApp.updatedAt,
+    updated_at: clientApp.updatedAt,
+  };
+}
+
+function serializeApiKey(apiKey: StoredApiKey, includeSecret = false) {
+  return {
+    id: apiKey.id,
+    keyId: apiKey.id,
+    key_id: apiKey.id,
+    appId: apiKey.appId,
+    app_id: apiKey.appId,
+    label: apiKey.label,
+    keyPreview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
+    key_preview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
+    ...(includeSecret ? { secret: apiKey.secret, apiKey: apiKey.secret, api_key: apiKey.secret } : {}),
+    createdAt: apiKey.createdAt,
+    created_at: apiKey.createdAt,
+    lastUsedAt: apiKey.lastUsedAt,
+    last_used_at: apiKey.lastUsedAt,
+    revokedAt: apiKey.revokedAt,
+    revoked_at: apiKey.revokedAt,
+    active: !apiKey.revokedAt,
+  };
+}
+
+function createUniqueAppId(value: string) {
+  const base = slugify(value) || `app-${randomUUID().slice(0, 8)}`;
+  let candidate = base;
+  let suffix = 2;
+
+  while (clientApps.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function scopedKey(...parts: string[]) {
+  return parts.map((part) => encodeURIComponent(part)).join(":");
+}
+
+function roomChannel(appId: string, roomId: string) {
+  return scopedKey("room", appId, roomId);
+}
+
+function ensureExternalUser(appId: string, externalUserId: string) {
+  const key = scopedKey(appId, externalUserId);
+
+  if (users.has(key)) {
+    return users.get(key)!;
   }
 
   const now = new Date().toISOString();
   const user: ExternalUser = {
+    appId,
     externalUserId,
     name: externalUserId,
     email: "",
@@ -942,27 +1323,30 @@ function ensureExternalUser(externalUserId: string) {
     updatedAt: now,
   };
 
-  users.set(externalUserId, user);
+  users.set(key, user);
   return user;
 }
 
-function ensureRoom(roomId: string, overrides: Partial<RoomRecord> = {}) {
-  const existing = rooms.get(roomId);
+function ensureRoom(appId: string, roomId: string, overrides: Partial<RoomRecord> = {}) {
+  const key = scopedKey(appId, roomId);
+  const existing = rooms.get(key);
   const now = new Date().toISOString();
 
   if (existing) {
     const updated: RoomRecord = {
       ...existing,
       ...overrides,
+      appId,
       id: roomId,
       metadata: overrides.metadata ?? existing.metadata,
       updatedAt: now,
     };
-    rooms.set(roomId, updated);
+    rooms.set(key, updated);
     return updated;
   }
 
   const room: RoomRecord = {
+    appId,
     id: roomId,
     name: overrides.name ?? `Room ${roomId}`,
     roomType: overrides.roomType ?? "video",
@@ -976,12 +1360,12 @@ function ensureRoom(roomId: string, overrides: Partial<RoomRecord> = {}) {
     updatedAt: now,
   };
 
-  rooms.set(roomId, room);
+  rooms.set(key, room);
   return room;
 }
 
 function startSession(input: Omit<SessionRecord, "id" | "startedAt">) {
-  const key = sessionKey(input.roomId, input.externalUserId ?? input.userId);
+  const key = sessionKey(input.appId, input.roomId, input.externalUserId ?? input.userId);
   const existingSessionId = activeSessionByUserRoom.get(key);
   const existingSession = existingSessionId ? sessions.get(existingSessionId) : undefined;
 
@@ -1001,8 +1385,8 @@ function startSession(input: Omit<SessionRecord, "id" | "startedAt">) {
   return session;
 }
 
-function endSession(roomId: string, userId: string) {
-  const key = sessionKey(roomId, userId);
+function endSession(appId: string, roomId: string, userId: string) {
+  const key = sessionKey(appId, roomId, userId);
   const sessionId = activeSessionByUserRoom.get(key);
   const session = sessionId ? sessions.get(sessionId) : undefined;
 
@@ -1015,36 +1399,39 @@ function endSession(roomId: string, userId: string) {
   return session;
 }
 
-function sessionKey(roomId: string, userId: string) {
-  return `${roomId}:${userId}`;
+function sessionKey(appId: string, roomId: string, userId: string) {
+  return scopedKey(appId, roomId, userId);
 }
 
-function getParticipants(roomId: string) {
-  if (!roomParticipants.has(roomId)) {
-    roomParticipants.set(roomId, new Map());
+function getParticipants(appId: string, roomId: string) {
+  const key = scopedKey(appId, roomId);
+
+  if (!roomParticipants.has(key)) {
+    roomParticipants.set(key, new Map());
   }
 
-  return roomParticipants.get(roomId)!;
+  return roomParticipants.get(key)!;
 }
 
 function leaveCurrentRoom(socket: Socket, reason: string, notifySelf = false) {
+  const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
   const roomId = socket.data.roomId as string | undefined;
 
   if (!roomId) {
     return;
   }
 
-  const participants = getParticipants(roomId);
+  const participants = getParticipants(appId, roomId);
   const participant = participants.get(socket.id);
 
   participants.delete(socket.id);
-  socket.leave(roomId);
+  socket.leave(roomChannel(appId, roomId));
   socket.data.roomId = undefined;
 
   if (participant) {
-    endSession(roomId, participant.externalUserId ?? participant.userId);
-    socket.to(roomId).emit("user-left", socket.id);
-    socket.to(roomId).emit("participant:left", {
+    endSession(appId, roomId, participant.externalUserId ?? participant.userId);
+    socket.to(roomChannel(appId, roomId)).emit("user-left", socket.id);
+    socket.to(roomChannel(appId, roomId)).emit("participant:left", {
       participant: serializeParticipant(participant),
       reason,
     });
@@ -1055,17 +1442,22 @@ function leaveCurrentRoom(socket: Socket, reason: string, notifySelf = false) {
   }
 
   if (participants.size === 0) {
-    roomParticipants.delete(roomId);
+    roomParticipants.delete(scopedKey(appId, roomId));
     return;
   }
 
-  io.to(roomId).emit("room:state", getRoomState(roomId));
+  io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
 }
 
 function findParticipantRoom(socketId: string) {
-  for (const [roomId, participants] of roomParticipants.entries()) {
-    if (participants.has(socketId)) {
-      return roomId;
+  for (const participants of roomParticipants.values()) {
+    const participant = participants.get(socketId);
+
+    if (participant) {
+      return {
+        appId: participant.appId,
+        roomId: participant.roomId,
+      };
     }
   }
 
@@ -1077,9 +1469,9 @@ function hasPermission(socket: Socket, permission: RtcPermission) {
   return permissions.includes(permission) || permissions.includes("moderate");
 }
 
-function getRoomState(roomId: string) {
-  const room = ensureRoom(roomId);
-  const participants = Array.from(getParticipants(roomId).values()).map(serializeParticipant);
+function getRoomState(appId: string, roomId: string) {
+  const room = ensureRoom(appId, roomId);
+  const participants = Array.from(getParticipants(appId, roomId).values()).map(serializeParticipant);
 
   return {
     room: serializeRoom(room),
@@ -1090,6 +1482,8 @@ function getRoomState(roomId: string) {
 
 function serializeRoom(room: RoomRecord) {
   return {
+    appId: room.appId,
+    app_id: room.appId,
     id: room.id,
     room_id: Number.isFinite(Number(room.id)) ? Number(room.id) : room.id,
     name: room.name,
@@ -1113,6 +1507,10 @@ function serializeParticipant(participant: ParticipantState) {
   return {
     socketId: participant.socketId,
     socket_id: participant.socketId,
+    appId: participant.appId,
+    app_id: participant.appId,
+    roomId: participant.roomId,
+    room_id: Number.isFinite(Number(participant.roomId)) ? Number(participant.roomId) : participant.roomId,
     userId: participant.userId,
     user_id: participant.userId,
     externalUserId: participant.externalUserId,
@@ -1171,6 +1569,14 @@ function readPermissions(value: unknown, fallback: RtcPermission[]) {
     .filter(Boolean);
 
   return permissions.length > 0 ? permissions : fallback;
+}
+
+function readStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => readString(item)).filter(Boolean);
 }
 
 function readRecord(value: unknown) {
