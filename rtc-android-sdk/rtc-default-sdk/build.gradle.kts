@@ -60,7 +60,7 @@ dependencies {
 
 val bundleSelfContainedReleaseAar by tasks.registering {
     group = "build"
-    description = "Builds a release AAR that embeds runtime jars, dependency AAR classes, and native libs."
+    description = "Builds an integration-safe release AAR with WebRTC/Socket.IO jars and native libs; OkHttp/Okio stay external."
 
     dependsOn("bundleReleaseAar")
 
@@ -92,7 +92,12 @@ val bundleSelfContainedReleaseAar by tasks.registering {
         runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
             val group = artifact.moduleVersion.id.group
 
-            if (group == "org.jetbrains.kotlin" || group == "org.jetbrains") {
+            if (
+                group == "org.jetbrains.kotlin" ||
+                group == "org.jetbrains" ||
+                group == "com.squareup.okhttp3" ||
+                group == "com.squareup.okio"
+            ) {
                 return@forEach
             }
 

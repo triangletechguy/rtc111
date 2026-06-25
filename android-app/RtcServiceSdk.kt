@@ -12,6 +12,7 @@ import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraVideoCapturer
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -354,6 +355,7 @@ class RtcServiceSdk(
         fun onLocalAudioMuted(muted: Boolean) {}
         fun onNoiseCancellationChanged(enabled: Boolean) {}
         fun onLocalVideoEnabled(enabled: Boolean) {}
+        fun onCameraSwitched(isFrontCamera: Boolean) {}
         fun onLocalMediaStateChanged(micEnabled: Boolean, cameraEnabled: Boolean, speakerEnabled: Boolean) {}
         fun onSpeakerphoneChanged(enabled: Boolean) {}
         fun onConnectionStateChanged(state: PeerConnection.PeerConnectionState) {}
@@ -693,6 +695,32 @@ class RtcServiceSdk(
         videoTrack?.setEnabled(enabled)
         emitMediaState()
         listener.onLocalVideoEnabled(enabled)
+    }
+
+    fun switchCamera(): Boolean {
+        if (!config.enableVideo) {
+            listener.onError("Video is disabled in this SDK config")
+            return false
+        }
+
+        val cameraCapturer = videoCapturer as? CameraVideoCapturer
+
+        if (cameraCapturer == null) {
+            listener.onError("No camera capturer is available")
+            return false
+        }
+
+        cameraCapturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(isFrontCamera: Boolean) {
+                listener.onCameraSwitched(isFrontCamera)
+            }
+
+            override fun onCameraSwitchError(error: String?) {
+                listener.onError(error ?: "Unable to switch camera")
+            }
+        })
+
+        return true
     }
 
     fun setScreenShareEnabled(enabled: Boolean) {

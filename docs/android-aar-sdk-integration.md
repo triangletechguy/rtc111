@@ -28,13 +28,16 @@ rtc-android-sdk/rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release.aar
 rtc-android-sdk/rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-contained.aar
 ```
 
-Use `rtc-default-sdk-release-self-contained.aar` when distributing a single file to an app team. The repository root `rtc-default-sdk-release.aar` is also copied from that self-contained build.
+Use `rtc-default-sdk-release-self-contained.aar` when distributing the SDK to an app team. The repository root `rtc-default-sdk-release.aar` is also copied from that integration-safe build.
 
 The SDK package exposed by the AAR is:
 
 ```kotlin
 import com.rtcone.sdk.RtcServiceSdk
+import com.rtcone.sdk.RtcDashboardSession
 ```
+
+`RtcDashboardSession` is the recommended wrapper for file-based app integration because it starts from one dashboard/backend token and exposes the common call controls directly.
 
 ## Add The AAR To The Android App
 
@@ -44,7 +47,7 @@ Copy the release AAR into the client Android app:
 app/libs/rtc-default-sdk-release.aar
 ```
 
-In the client app module Gradle file, add the local AAR. The release AAR is self-contained and embeds WebRTC, Socket.IO, OkHttp, Okio, and WebRTC native libraries.
+In the client app module Gradle file, add the local AAR and OkHttp. The release AAR embeds WebRTC, Socket.IO, Engine.IO, and WebRTC native libraries. It deliberately does not embed OkHttp or Okio because many Android apps already include Okio through Firebase, DataStore, gRPC, or other plugins; embedding those common classes causes duplicate-class build failures.
 
 Kotlin DSL:
 
@@ -59,6 +62,7 @@ android {
 
 dependencies {
     implementation(files("libs/rtc-default-sdk-release.aar"))
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 ```
 
@@ -75,10 +79,28 @@ android {
 
 dependencies {
     implementation files("libs/rtc-default-sdk-release.aar")
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
 }
 ```
 
 Make sure the Android project has `google()` and `mavenCentral()` in its repositories.
+
+For Flutter host apps, use the repository package `rtc_flutter_sdk`. It embeds the Android AAR and provides the Dart `RtcFlutterSdk` API through a MethodChannel, so each app does not need to copy native Kotlin bridge code. Adding an Android AAR alone does not create Dart APIs.
+
+```yaml
+dependencies:
+  rtc_flutter_sdk:
+    path: ../rtc_flutter_sdk
+```
+
+```dart
+import 'package:rtc_flutter_sdk/rtc_flutter_sdk.dart';
+
+await RtcFlutterSdk.start(
+  accessToken: dashboardAccessToken,
+  roomId: 'support-room-1',
+);
+```
 
 ## Permissions
 
@@ -156,27 +178,29 @@ The token is checked during the Socket.IO/WebRTC signaling connection. If the to
 The SDK can parse the dashboard/backend token, infer audio vs video from `rtc_mode` and `permissions`, check token expiration, and start the correct room flow with one SDK call.
 
 ```kotlin
-import com.rtcone.sdk.RtcServiceSdk
+import com.rtcone.sdk.RtcDashboardSession
 
-private var rtc: RtcServiceSdk? = null
+private var rtc: RtcDashboardSession? = null
 
 private fun startRtc() {
     val accessToken = tokenFromDashboardOrBackend
     val roomId = "support-room-1"
 
-    rtc = RtcServiceSdk.startWithDashboardToken(
+    rtc = RtcDashboardSession.start(
         context = this,
         accessToken = accessToken,
         roomId = roomId,
-        listener = object : RtcServiceSdk.Listener {
-            override fun onRoomJoined(roomId: String) {
+        listener = object : RtcDashboardSession.Listener {
+            override fun onConnected(roomId: String) {
                 // The backend accepted the room join.
             }
 
-            override fun onRtcConnectionIndicatorChanged(
-                indicator: RtcServiceSdk.ConnectionIndicator
-            ) {
+            override fun onStatusChanged(status: String) {
                 // Update connecting/in-room/waiting/connected/failed UI.
+            }
+
+            override fun onCameraSwitched(isFrontCamera: Boolean) {
+                // Update camera toggle UI.
             }
 
             override fun onError(message: String) {
@@ -190,7 +214,7 @@ private fun startRtc() {
 If the token contains `roomId`/`room_id`, the app can omit the explicit room id:
 
 ```kotlin
-rtc = RtcServiceSdk.startWithDashboardToken(
+rtc = RtcDashboardSession.start(
     context = this,
     accessToken = tokenWithRoomId,
     listener = listener
@@ -200,8 +224,23 @@ rtc = RtcServiceSdk.startWithDashboardToken(
 Apps that want to request only the permissions required by a token can ask the SDK:
 
 ```kotlin
-val permissions = RtcServiceSdk.requiredAndroidPermissionsForToken(accessToken)
+val permissions = RtcDashboardSession.requiredAndroidPermissions(accessToken)
 ```
+
+The same session object exposes the common controls needed by call screens:
+
+```kotlin
+rtc?.muteLocalAudio(true)
+rtc?.setSpeakerphoneOn(true)
+rtc?.setLocalVideoEnabled(true)
+rtc?.switchCamera()
+rtc?.setNoiseCancellationEnabled(true)
+rtc?.sendMessage("Hello")
+rtc?.leaveRoom()
+rtc?.release()
+```
+
+Use `RtcServiceSdk` directly only when the host app needs lower-level media hooks such as direct renderer attachment, screen sharing, custom video effects, or all room/chat/moderation callbacks.
 
 ## Start A Video Room Manually
 
@@ -348,7 +387,8 @@ If the user leaves the room but stays on the screen, call `leaveRoom()`. If the 
 - `Connect before joining a room`: call `connectAndJoin()` or wait for `onConnected()` before calling `joinRoom()`.
 - `Video is disabled in this SDK config`: the SDK was created with an audio-only config. Use `RtcServiceSdk.Config.videoCall(...)` for camera or screen share.
 - No remote video: confirm both users joined the same room, both tokens include `signal`, and publishers include `publish_video` for video rooms.
-- Build cannot find WebRTC or Socket.IO classes: add the explicit dependencies shown above because a local AAR import does not resolve transitive dependencies.
+- Duplicate Okio/OkHttp classes: use the current integration-safe AAR. It should contain `libs/android-*.jar`, `libs/socket.io-client-*.jar`, and `libs/engine.io-client-*.jar`, but not `libs/okhttp-*.jar` or `libs/okio-*.jar`.
+- Build cannot find `okhttp3.*` classes: add `implementation("com.squareup.okhttp3:okhttp:4.12.0")` in the app module.
 
 ## Related Docs
 

@@ -6,6 +6,8 @@ This project builds the SDK from `../android-app/RtcServiceSdk.kt` and does not 
 
 For client app setup with the `.aar` file, Gradle dependencies, runtime permissions, and token flow, see `../docs/android-aar-sdk-integration.md`.
 
+Flutter apps should use `../rtc_flutter_sdk`, which wraps this AAR with a Dart `RtcFlutterSdk` API and an Android MethodChannel plugin.
+
 ## Build
 
 ```bash
@@ -19,25 +21,39 @@ rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release.aar
 rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-contained.aar
 ```
 
-Use the self-contained AAR for file-based app integration. It embeds the SDK runtime dependencies and WebRTC native libraries so the host app does not need separate WebRTC or Socket.IO dependency declarations.
+Use the self-contained AAR for file-based app integration. It embeds WebRTC, Socket.IO, Engine.IO, and WebRTC native libraries so the host app does not need separate WebRTC or Socket.IO dependency declarations. The host app should still declare OkHttp, for example `implementation("com.squareup.okhttp3:okhttp:4.12.0")`; OkHttp and Okio are not embedded to avoid duplicate-class failures in Firebase/Flutter apps.
 
 ## Runtime Endpoint
 
 Use the deployed signaling URL and an RTC access token returned by the dashboard/backend. The easiest path is the dashboard-token helper:
 
 ```kotlin
-val rtc = RtcServiceSdk.startWithDashboardToken(
+import com.rtcone.sdk.RtcDashboardSession
+
+val rtc = RtcDashboardSession.start(
     context = this,
     accessToken = tokenFromDashboardOrBackend,
     roomId = "room1",
-    listener = listener
+    listener = object : RtcDashboardSession.Listener {
+        override fun onConnected(roomId: String) {
+            // Room joined.
+        }
+
+        override fun onStatusChanged(status: String) {
+            // CONNECTING, IN_ROOM, PEER_CONNECTED, FAILED, etc.
+        }
+
+        override fun onError(message: String) {
+            // Token, permission, network, or room errors.
+        }
+    }
 )
 ```
 
 If the token includes `roomId`/`room_id`, the SDK can read it:
 
 ```kotlin
-val rtc = RtcServiceSdk.startWithDashboardToken(
+val rtc = RtcDashboardSession.start(
     context = this,
     accessToken = tokenWithRoomId,
     listener = listener
@@ -47,8 +63,21 @@ val rtc = RtcServiceSdk.startWithDashboardToken(
 The SDK parses `rtc_mode` and `permissions` from the token to choose audio vs video. It also exposes:
 
 ```kotlin
-RtcServiceSdk.parseAccessToken(token)
-RtcServiceSdk.requiredAndroidPermissionsForToken(token)
+RtcDashboardSession.parseToken(token)
+RtcDashboardSession.requiredAndroidPermissions(token)
+```
+
+Common call controls are available on the session wrapper:
+
+```kotlin
+rtc.muteLocalAudio(true)
+rtc.setSpeakerphoneOn(true)
+rtc.setLocalVideoEnabled(true)
+rtc.switchCamera()
+rtc.setNoiseCancellationEnabled(true)
+rtc.sendMessage("Hello")
+rtc.leaveRoom()
+rtc.release()
 ```
 
 Lower-level configuration remains available:
