@@ -96,6 +96,7 @@ type SessionRecord = {
   micEnabled: boolean;
   cameraEnabled: boolean;
   speakerEnabled: boolean;
+  noiseCancellationEnabled: boolean;
   permissions: RtcPermission[];
   startedAt: string;
   endedAt?: string;
@@ -112,9 +113,68 @@ type ParticipantState = {
   micEnabled: boolean;
   cameraEnabled: boolean;
   speakerEnabled: boolean;
+  noiseCancellationEnabled: boolean;
+  screenShareEnabled: boolean;
+  videoEffects: VideoEffectState;
   permissions: RtcPermission[];
   joinedAt: string;
   lastSeenAt: string;
+};
+
+type VideoEffectState = {
+  filter: string;
+  aiFilter: string;
+  sticker: string;
+  faceDetectEnabled: boolean;
+  beautyEnabled: boolean;
+  beautyLevel: number;
+  smoothingLevel: number;
+  whiteningLevel: number;
+  eyeLevel: number;
+  faceSlimLevel: number;
+  makeup: Record<string, unknown>;
+  updatedAt?: string;
+};
+
+type YoutubeRoomState = {
+  appId: string;
+  roomId: string;
+  videoId: string;
+  videoUrl?: string;
+  title?: string;
+  playbackState: "ready" | "playing" | "paused" | "stopped";
+  positionSeconds: number;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+type LivePkState = {
+  appId: string;
+  roomId: string;
+  status: "idle" | "matching" | "active" | "ended";
+  hostUserId: string;
+  opponentUserId?: string;
+  hostScore: number;
+  opponentScore: number;
+  startedAt?: string;
+  endedAt?: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+};
+
+type SecurityIncident = {
+  id: string;
+  appId: string;
+  roomId?: string;
+  reporterSocketId?: string;
+  reporterUserId?: string;
+  targetUserId?: string;
+  category: string;
+  severity: "low" | "medium" | "high";
+  message: string;
+  blocked: boolean;
+  createdAt: string;
+  metadata: Record<string, unknown>;
 };
 
 type StoredRtcToken = {
@@ -145,6 +205,9 @@ const rooms = new Map<string, RoomRecord>();
 const sessions = new Map<string, SessionRecord>();
 const activeSessionByUserRoom = new Map<string, string>();
 const roomParticipants = new Map<string, Map<string, ParticipantState>>();
+const youtubeRoomStates = new Map<string, YoutubeRoomState>();
+const livePkStates = new Map<string, LivePkState>();
+const securityIncidents: SecurityIncident[] = [];
 
 /**
  * IMPORTANT:
@@ -362,20 +425,9 @@ app.post("/rtc-token", (req, res) => {
   const userId = readString(req.body?.userId) || `web-${randomUUID()}`;
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtcMode) || readString(req.body?.rtc_mode) || "video";
-  const permissions = readPermissions(req.body?.permissions, [
-    "join",
-    "publish_audio",
-    "publish_video",
-    "chat",
-    "signal",
-  ]);
+  const permissions = readPermissions(req.body?.permissions, defaultPermissionsForRtcMode(rtcMode));
 
-  ensureRoom(DEFAULT_CLIENT_APP_ID, roomId, {
-    name: `Room ${roomId}`,
-    roomType: rtcMode,
-    maxParticipants: DEFAULT_ROOM_CAPACITY,
-    maxMicCount: DEFAULT_ROOM_CAPACITY,
-  });
+  ensureRoomForRtcMode(DEFAULT_CLIENT_APP_ID, roomId, rtcMode);
 
   res.json(issueToken({ appId: DEFAULT_CLIENT_APP_ID, roomId, userId, role, rtcMode, permissions }));
 });
@@ -398,7 +450,19 @@ app.get("/client/me", requireClientAuth, (req, res) => {
       "rtc.session.end",
       "rtc.signaling",
       "rtc.media_state",
+      "rtc.audio_room",
+      "rtc.one_to_one_voice_call",
+      "rtc.group_voice_chat",
+      "rtc.video_call",
+      "rtc.group_video_chat",
+      "rtc.solo_video_live",
+      "rtc.live_video_pk",
+      "rtc.screen_share",
+      "rtc.video_effects",
+      "rtc.youtube_room",
+      "rtc.ai_security",
       "rtc.token.saved_validation",
+      "rtc.connection_indicator",
     ],
   });
 });
@@ -444,22 +508,32 @@ app.post("/client/rooms", requireClientAuth, (req, res) => {
   const clientApp = getClientApp(req);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId) || String(nextRoomId++);
-  const room = ensureRoom(clientApp.id, roomId, {
+  const roomType = readString(req.body?.room_type) || readString(req.body?.roomType) || "voice";
+  const defaultCapacity = getDefaultRoomCapacityForMode(roomType);
+  let room = ensureRoom(clientApp.id, roomId, {
     name: readString(req.body?.name) || `Room ${roomId}`,
-    roomType: readString(req.body?.room_type) || readString(req.body?.roomType) || "voice",
+    roomType,
     privacyType: readString(req.body?.privacy_type) || readString(req.body?.privacyType) || "public",
     maxParticipants: readPositiveNumber(req.body?.max_participants)
       ?? readPositiveNumber(req.body?.maxParticipants)
       ?? readPositiveNumber(req.body?.max_mic_count)
       ?? readPositiveNumber(req.body?.maxMicCount)
-      ?? DEFAULT_ROOM_CAPACITY,
+      ?? defaultCapacity.maxParticipants,
     maxMicCount: readPositiveNumber(req.body?.max_mic_count)
       ?? readPositiveNumber(req.body?.maxMicCount)
-      ?? DEFAULT_ROOM_CAPACITY,
+      ?? defaultCapacity.maxMicCount,
     chatEnabled: readBoolean(req.body?.chat_enabled, readBoolean(req.body?.chatEnabled, true)),
     createdBy: externalUserId,
     metadata: readRecord(req.body?.metadata) ?? {},
   });
+
+  if ((isOneToOneVoiceMode(roomType) || isOneToOneVideoMode(roomType)) && (room.maxParticipants > 2 || room.maxMicCount > 2)) {
+    room = ensureRoom(clientApp.id, roomId, {
+      roomType: normalizeRtcMode(roomType),
+      maxParticipants: 2,
+      maxMicCount: 2,
+    });
+  }
 
   res.status(201).json({
     room: serializeRoom(room),
@@ -496,19 +570,13 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
 
   ensureExternalUser(clientApp.id, externalUserId);
 
-  if (roomId) {
-    ensureRoom(clientApp.id, roomId);
-  }
-
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtc_mode) || readString(req.body?.rtcMode) || "video";
-  const permissions = readPermissions(req.body?.permissions, [
-    "join",
-    "publish_audio",
-    "publish_video",
-    "chat",
-    "signal",
-  ]);
+  const permissions = readPermissions(req.body?.permissions, defaultPermissionsForRtcMode(rtcMode));
+
+  if (roomId) {
+    ensureRoomForRtcMode(clientApp.id, roomId, rtcMode);
+  }
 
   res.json(issueToken({
     appId: clientApp.id,
@@ -536,20 +604,20 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
     return;
   }
 
-  ensureExternalUser(clientApp.id, externalUserId);
-  ensureRoom(clientApp.id, roomId);
-
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtc_mode) || readString(req.body?.rtcMode) || "voice";
+  ensureExternalUser(clientApp.id, externalUserId);
+  ensureRoomForRtcMode(clientApp.id, roomId, rtcMode);
   const micEnabled = readBoolean(req.body?.mic_enabled, readBoolean(req.body?.micEnabled, true));
-  const cameraEnabled = readBoolean(req.body?.camera_enabled, readBoolean(req.body?.cameraEnabled, true));
-  const permissions = readPermissions(req.body?.permissions, [
-    "join",
-    "publish_audio",
-    ...(cameraEnabled ? ["publish_video"] : []),
-    "chat",
-    "signal",
-  ]);
+  const cameraEnabled = readBoolean(
+    req.body?.camera_enabled,
+    readBoolean(req.body?.cameraEnabled, !isAudioOnlyRtcMode(rtcMode)),
+  );
+  const noiseCancellationEnabled = readBoolean(
+    req.body?.noise_cancellation_enabled,
+    readBoolean(req.body?.noiseCancellationEnabled, true),
+  );
+  const permissions = readPermissions(req.body?.permissions, defaultPermissionsForRtcMode(rtcMode, cameraEnabled));
 
   const session = startSession({
     appId: clientApp.id,
@@ -561,6 +629,7 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
     micEnabled,
     cameraEnabled,
     speakerEnabled: true,
+    noiseCancellationEnabled,
     permissions,
   });
 
@@ -677,6 +746,17 @@ app.post("/client/rtc/token/revoke", requireClientAuth, (req, res) => {
   });
 });
 
+app.get("/client/security/incidents", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
+
+  res.json({
+    incidents: securityIncidents
+      .filter((incident) => incident.appId === clientApp.id)
+      .slice(-200)
+      .reverse(),
+  });
+});
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -736,6 +816,26 @@ io.on("connection", (socket) => {
 
     const room = ensureRoom(appId, roomId);
     const previousRoomId = socket.data.roomId as string | undefined;
+    const externalUserId = readString(socket.data.externalUserId);
+    const syncedUser = externalUserId ? users.get(scopedKey(appId, externalUserId)) : undefined;
+
+    if (syncedUser && syncedUser.status !== "active") {
+      const incident = recordSecurityIncident({
+        appId,
+        roomId,
+        reporterSocketId: socket.id,
+        reporterUserId: externalUserId,
+        category: "user_status",
+        severity: "high",
+        message: `Blocked inactive user status: ${syncedUser.status}`,
+        blocked: true,
+        metadata: { status: syncedUser.status },
+      });
+
+      socket.emit("security:incident", incident);
+      socket.emit("room:error", { message: "User is not allowed to join this room" });
+      return;
+    }
 
     if (previousRoomId && previousRoomId !== roomId) {
       leaveCurrentRoom(socket, "joined-another-room");
@@ -752,6 +852,47 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const rtcMode = (socket.data.rtcMode as string | undefined) ?? room.roomType;
+    const micEnabled = readBoolean(payload.micEnabled, true);
+    const cameraEnabled = readBoolean(payload.cameraEnabled, !isAudioOnlyRtcMode(rtcMode));
+    const noiseCancellationEnabled = readBoolean(payload.noiseCancellationEnabled, true);
+    const screenShareEnabled = readBoolean(payload.screenShareEnabled, false);
+    const videoEffects = readVideoEffectState(payload.videoEffects ?? payload.video_effects);
+
+    if (micEnabled && !hasPermission(socket, "publish_audio")) {
+      socket.emit("room:error", { message: "Token does not allow audio publishing" });
+      return;
+    }
+
+    if (cameraEnabled && !hasPermission(socket, "publish_video")) {
+      socket.emit("room:error", { message: "Token does not allow video publishing" });
+      return;
+    }
+
+    if (cameraEnabled && isAudioOnlyRtcMode(rtcMode)) {
+      socket.emit("room:error", { message: "Audio rooms do not allow camera publishing" });
+      return;
+    }
+
+    if (screenShareEnabled && !hasPermission(socket, "screen_share")) {
+      socket.emit("room:error", { message: "Token does not allow screen sharing" });
+      return;
+    }
+
+    const existingParticipant = participants.get(socket.id);
+    const activeMicCount = Array.from(participants.values()).filter(
+      (participant) => participant.socketId !== socket.id && participant.micEnabled,
+    ).length;
+
+    if (micEnabled && !existingParticipant?.micEnabled && activeMicCount >= room.maxMicCount) {
+      socket.emit("room:error", {
+        roomId,
+        maxMicCount: room.maxMicCount,
+        message: "Room microphone seats are full",
+      });
+      return;
+    }
+
     const participant: ParticipantState = {
       socketId: socket.id,
       appId,
@@ -759,10 +900,13 @@ io.on("connection", (socket) => {
       userId: socket.data.userId as string,
       externalUserId: socket.data.externalUserId as string | undefined,
       role: (socket.data.role as string | undefined) ?? "publisher",
-      rtcMode: (socket.data.rtcMode as string | undefined) ?? room.roomType,
-      micEnabled: readBoolean(payload.micEnabled, true),
-      cameraEnabled: readBoolean(payload.cameraEnabled, room.roomType !== "voice"),
+      rtcMode,
+      micEnabled,
+      cameraEnabled,
       speakerEnabled: readBoolean(payload.speakerEnabled, true),
+      noiseCancellationEnabled,
+      screenShareEnabled,
+      videoEffects,
       permissions: readPermissions(socket.data.permissions, ["join", "signal"]),
       joinedAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
@@ -782,6 +926,7 @@ io.on("connection", (socket) => {
       micEnabled: participant.micEnabled,
       cameraEnabled: participant.cameraEnabled,
       speakerEnabled: participant.speakerEnabled,
+      noiseCancellationEnabled: participant.noiseCancellationEnabled,
       permissions: participant.permissions,
     });
 
@@ -789,12 +934,28 @@ io.on("connection", (socket) => {
       room: serializeRoom(room),
       participant: serializeParticipant(participant),
       state: getRoomState(appId, roomId),
+      youtubeState: getYoutubeRoomState(appId, roomId),
+      youtube_state: getYoutubeRoomState(appId, roomId),
+      livePkState: getLivePkState(appId, roomId),
+      live_pk_state: getLivePkState(appId, roomId),
     });
 
     socket.emit(
       "existing-users",
       Array.from(participants.keys()).filter((socketId) => socketId !== socket.id),
     );
+
+    const youtubeState = getYoutubeRoomState(appId, roomId);
+
+    if (youtubeState) {
+      socket.emit("youtube:state", youtubeState);
+    }
+
+    const livePkState = getLivePkState(appId, roomId);
+
+    if (livePkState) {
+      socket.emit("live:pk:state", livePkState);
+    }
 
     socket.to(roomChannel(appId, roomId)).emit("user-joined", socket.id);
     socket.to(roomChannel(appId, roomId)).emit("participant:joined", serializeParticipant(participant));
@@ -821,9 +982,61 @@ io.on("connection", (socket) => {
       return;
     }
 
-    participant.micEnabled = readBoolean(payload.micEnabled, participant.micEnabled);
-    participant.cameraEnabled = readBoolean(payload.cameraEnabled, participant.cameraEnabled);
+    const room = ensureRoom(appId, roomId);
+    const nextMicEnabled = readBoolean(payload.micEnabled, participant.micEnabled);
+    const nextCameraEnabled = readBoolean(payload.cameraEnabled, participant.cameraEnabled);
+
+    if (nextMicEnabled && !participant.permissions.includes("publish_audio") && !participant.permissions.includes("moderate")) {
+      socket.emit("room:error", { message: "Token does not allow audio publishing" });
+      return;
+    }
+
+    if (nextCameraEnabled && !participant.permissions.includes("publish_video") && !participant.permissions.includes("moderate")) {
+      socket.emit("room:error", { message: "Token does not allow video publishing" });
+      return;
+    }
+
+    if (nextCameraEnabled && isAudioOnlyRtcMode(participant.rtcMode)) {
+      socket.emit("room:error", { message: "Audio rooms do not allow camera publishing" });
+      return;
+    }
+
+    const activeMicCount = Array.from(participants.values()).filter(
+      (otherParticipant) => otherParticipant.socketId !== socket.id && otherParticipant.micEnabled,
+    ).length;
+
+    if (nextMicEnabled && !participant.micEnabled && activeMicCount >= room.maxMicCount) {
+      socket.emit("room:error", {
+        roomId,
+        maxMicCount: room.maxMicCount,
+        message: "Room microphone seats are full",
+      });
+      return;
+    }
+
+    participant.micEnabled = nextMicEnabled;
+    participant.cameraEnabled = nextCameraEnabled;
     participant.speakerEnabled = readBoolean(payload.speakerEnabled, participant.speakerEnabled);
+    participant.noiseCancellationEnabled = readBoolean(
+      payload.noiseCancellationEnabled,
+      participant.noiseCancellationEnabled,
+    );
+    const nextScreenShareEnabled = readBoolean(payload.screenShareEnabled, participant.screenShareEnabled);
+
+    if (nextScreenShareEnabled && !participant.permissions.includes("screen_share") && !participant.permissions.includes("moderate")) {
+      socket.emit("room:error", { message: "Token does not allow screen sharing" });
+      return;
+    }
+
+    participant.screenShareEnabled = nextScreenShareEnabled;
+
+    if (payload.videoEffects || payload.video_effects) {
+      participant.videoEffects = readVideoEffectState(payload.videoEffects ?? payload.video_effects, participant.videoEffects);
+      io.to(roomChannel(appId, roomId)).emit("video:effects", {
+        participant: serializeParticipant(participant),
+        effects: participant.videoEffects,
+      });
+    }
     participant.lastSeenAt = new Date().toISOString();
 
     const sessionId = activeSessionByUserRoom.get(
@@ -835,10 +1048,249 @@ io.on("connection", (socket) => {
       session.micEnabled = participant.micEnabled;
       session.cameraEnabled = participant.cameraEnabled;
       session.speakerEnabled = participant.speakerEnabled;
+      session.noiseCancellationEnabled = participant.noiseCancellationEnabled;
     }
 
     io.to(roomChannel(appId, roomId)).emit("participant:updated", serializeParticipant(participant));
+    io.to(roomChannel(appId, roomId)).emit("screen:state", {
+      participant: serializeParticipant(participant),
+      screenShareEnabled: participant.screenShareEnabled,
+      screen_share_enabled: participant.screenShareEnabled,
+    });
     io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
+  });
+
+  socket.on("screen:state", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+
+    if (!roomId) {
+      socket.emit("room:error", { message: "Join a room before updating screen share state" });
+      return;
+    }
+
+    const participant = getParticipants(appId, roomId).get(socket.id);
+
+    if (!participant) {
+      return;
+    }
+
+    const enabled = readBoolean(payload.enabled ?? payload.screenShareEnabled ?? payload.screen_share_enabled, false);
+
+    if (enabled && !participant.permissions.includes("screen_share") && !participant.permissions.includes("moderate")) {
+      socket.emit("room:error", { message: "Token does not allow screen sharing" });
+      return;
+    }
+
+    participant.screenShareEnabled = enabled;
+    participant.lastSeenAt = new Date().toISOString();
+
+    io.to(roomChannel(appId, roomId)).emit("screen:state", {
+      participant: serializeParticipant(participant),
+      screenShareEnabled: enabled,
+      screen_share_enabled: enabled,
+    });
+    io.to(roomChannel(appId, roomId)).emit("participant:updated", serializeParticipant(participant));
+    io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
+  });
+
+  socket.on("video:effects", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+
+    if (!roomId) {
+      socket.emit("room:error", { message: "Join a room before updating video effects" });
+      return;
+    }
+
+    const participant = getParticipants(appId, roomId).get(socket.id);
+
+    if (!participant) {
+      return;
+    }
+
+    participant.videoEffects = readVideoEffectState(payload, participant.videoEffects);
+    participant.lastSeenAt = new Date().toISOString();
+
+    io.to(roomChannel(appId, roomId)).emit("video:effects", {
+      participant: serializeParticipant(participant),
+      effects: participant.videoEffects,
+    });
+    io.to(roomChannel(appId, roomId)).emit("participant:updated", serializeParticipant(participant));
+  });
+
+  socket.on("live:pk:update", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+
+    if (!roomId) {
+      socket.emit("room:error", { message: "Join a room before updating live PK state" });
+      return;
+    }
+
+    const participant = getParticipants(appId, roomId).get(socket.id);
+
+    if (!participant) {
+      return;
+    }
+
+    if (!canControlLive(participant)) {
+      socket.emit("room:error", { message: "Token does not allow live PK control" });
+      return;
+    }
+
+    const previousState = livePkStates.get(scopedKey(appId, roomId));
+    const status = readLivePkStatus(payload.status) ?? previousState?.status ?? "idle";
+    const now = new Date().toISOString();
+    const state: LivePkState = {
+      appId,
+      roomId,
+      status,
+      hostUserId: readString(payload.hostUserId)
+        || readString(payload.host_user_id)
+        || previousState?.hostUserId
+        || participant.externalUserId
+        || participant.userId,
+      opponentUserId: readString(payload.opponentUserId)
+        || readString(payload.opponent_user_id)
+        || previousState?.opponentUserId,
+      hostScore: readNonNegativeNumber(payload.hostScore ?? payload.host_score, previousState?.hostScore ?? 0),
+      opponentScore: readNonNegativeNumber(payload.opponentScore ?? payload.opponent_score, previousState?.opponentScore ?? 0),
+      startedAt: status === "active" ? previousState?.startedAt ?? now : previousState?.startedAt,
+      endedAt: status === "ended" ? now : undefined,
+      updatedAt: now,
+      metadata: readRecord(payload.metadata) ?? previousState?.metadata ?? {},
+    };
+
+    livePkStates.set(scopedKey(appId, roomId), state);
+    io.to(roomChannel(appId, roomId)).emit("live:pk:state", serializeLivePkState(state));
+  });
+
+  socket.on("youtube:update", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+
+    if (!roomId) {
+      socket.emit("youtube:error", { message: "Join a room before updating YouTube playback" });
+      return;
+    }
+
+    const participants = getParticipants(appId, roomId);
+    const participant = participants.get(socket.id);
+
+    if (!participant) {
+      socket.emit("youtube:error", { message: "Participant is not in this room" });
+      return;
+    }
+
+    if (!canControlYoutube(participant)) {
+      socket.emit("youtube:error", { message: "Token does not allow YouTube room control" });
+      return;
+    }
+
+    const videoInput = readString(payload.videoId)
+      || readString(payload.video_id)
+      || readString(payload.videoUrl)
+      || readString(payload.video_url);
+    const previousState = getYoutubeRoomState(appId, roomId);
+    const videoId = parseYoutubeVideoId(videoInput) || previousState?.videoId || "";
+
+    if (!videoId) {
+      socket.emit("youtube:error", { message: "A valid YouTube video id or URL is required" });
+      return;
+    }
+
+    const playbackState = readYoutubePlaybackState(payload.playbackState ?? payload.playback_state)
+      ?? previousState?.playbackState
+      ?? "ready";
+    const positionSeconds = readNonNegativeNumber(
+      payload.positionSeconds ?? payload.position_seconds,
+      previousState?.positionSeconds ?? 0,
+    );
+    const videoUrl = readString(payload.videoUrl) || readString(payload.video_url) || previousState?.videoUrl;
+    const title = readString(payload.title) || previousState?.title;
+    const state: YoutubeRoomState = {
+      appId,
+      roomId,
+      videoId,
+      ...(videoUrl ? { videoUrl } : {}),
+      ...(title ? { title } : {}),
+      playbackState,
+      positionSeconds,
+      updatedAt: new Date().toISOString(),
+      updatedBy: participant.externalUserId ?? participant.userId,
+    };
+
+    youtubeRoomStates.set(scopedKey(appId, roomId), state);
+    io.to(roomChannel(appId, roomId)).emit("youtube:state", serializeYoutubeRoomState(state));
+  });
+
+  socket.on("security:check", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+    const text = readString(payload.text ?? payload.message ?? payload.content);
+    const category = readString(payload.category) || "text";
+    const result = evaluateSecurityContent(text, category);
+
+    if (!result.allowed) {
+      const incident = recordSecurityIncident({
+        appId,
+        roomId,
+        reporterSocketId: socket.id,
+        reporterUserId: readString(socket.data.externalUserId) || readString(socket.data.userId),
+        category,
+        severity: result.severity,
+        message: result.reason,
+        blocked: true,
+        metadata: {
+          signals: result.signals,
+        },
+      });
+
+      emitSecurityIncident(appId, roomId, incident);
+    }
+
+    const response = {
+      allowed: result.allowed,
+      severity: result.severity,
+      reason: result.reason,
+      signals: result.signals,
+    };
+
+    if (typeof callback === "function") {
+      callback(response);
+      return;
+    }
+
+    socket.emit("security:checked", response);
+  });
+
+  socket.on("security:report", (payload: Record<string, unknown> = {}) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const roomId = socket.data.roomId as string | undefined;
+    const category = readString(payload.category) || "manual_report";
+    const message = readString(payload.message) || "Security report";
+    const result = evaluateSecurityContent(message, category);
+    const incident = recordSecurityIncident({
+      appId,
+      roomId,
+      reporterSocketId: socket.id,
+      reporterUserId: readString(socket.data.externalUserId) || readString(socket.data.userId),
+      targetUserId: readString(payload.targetUserId) || readString(payload.target_user_id),
+      category,
+      severity: readSecuritySeverity(payload.severity) ?? result.severity,
+      message,
+      blocked: readBoolean(payload.blocked, !result.allowed),
+      metadata: readRecord(payload.metadata) ?? {
+        signals: result.signals,
+      },
+    });
+
+    if (roomId) {
+      emitSecurityIncident(appId, roomId, incident);
+    } else {
+      socket.emit("security:incident", incident);
+    }
   });
 
   socket.on("signal", ({ to, data }: { to?: string; data?: unknown } = {}) => {
@@ -1364,6 +1816,31 @@ function ensureRoom(appId: string, roomId: string, overrides: Partial<RoomRecord
   return room;
 }
 
+function ensureRoomForRtcMode(appId: string, roomId: string, rtcMode: string) {
+  const existing = rooms.get(scopedKey(appId, roomId));
+
+  if (existing) {
+    if ((isOneToOneVoiceMode(rtcMode) || isOneToOneVideoMode(rtcMode)) && (existing.maxParticipants > 2 || existing.maxMicCount > 2)) {
+      return ensureRoom(appId, roomId, {
+        roomType: normalizeRtcMode(rtcMode),
+        maxParticipants: 2,
+        maxMicCount: 2,
+      });
+    }
+
+    return existing;
+  }
+
+  const capacity = getDefaultRoomCapacityForMode(rtcMode);
+
+  return ensureRoom(appId, roomId, {
+    name: `Room ${roomId}`,
+    roomType: normalizeRtcMode(rtcMode),
+    maxParticipants: capacity.maxParticipants,
+    maxMicCount: capacity.maxMicCount,
+  });
+}
+
 function startSession(input: Omit<SessionRecord, "id" | "startedAt">) {
   const key = sessionKey(input.appId, input.roomId, input.externalUserId ?? input.userId);
   const existingSessionId = activeSessionByUserRoom.get(key);
@@ -1469,6 +1946,334 @@ function hasPermission(socket: Socket, permission: RtcPermission) {
   return permissions.includes(permission) || permissions.includes("moderate");
 }
 
+function defaultPermissionsForRtcMode(rtcMode: string, cameraEnabled = !isAudioOnlyRtcMode(rtcMode)): RtcPermission[] {
+  const normalized = normalizeRtcMode(rtcMode);
+
+  return [
+    "join",
+    "publish_audio",
+    ...(cameraEnabled && !isAudioOnlyRtcMode(rtcMode) ? ["publish_video"] : []),
+    ...((cameraEnabled && !isAudioOnlyRtcMode(rtcMode)) || isScreenShareRtcMode(normalized) ? ["screen_share"] : []),
+    "chat",
+    "signal",
+    ...(normalized === "youtube" || normalized === "youtube_room" ? ["youtube_control"] : []),
+    ...(isLiveRtcMode(normalized) ? ["live_control"] : []),
+    "security_report",
+  ];
+}
+
+function isAudioOnlyRtcMode(rtcMode: string) {
+  const normalized = normalizeRtcMode(rtcMode);
+  return normalized === "voice"
+    || normalized === "audio"
+    || normalized === "voice_call"
+    || normalized === "one_to_one_voice"
+    || normalized === "one_to_one_voice_call"
+    || normalized === "group_voice"
+    || normalized === "group_voice_chat"
+    || normalized === "youtube"
+    || normalized === "youtube_room";
+}
+
+function isOneToOneVoiceMode(rtcMode: string) {
+  const normalized = normalizeRtcMode(rtcMode);
+  return normalized === "voice_call"
+    || normalized === "one_to_one_voice"
+    || normalized === "one_to_one_voice_call";
+}
+
+function isOneToOneVideoMode(rtcMode: string) {
+  const normalized = normalizeRtcMode(rtcMode);
+  return normalized === "video_call"
+    || normalized === "one_to_one_video"
+    || normalized === "one_to_one_video_call";
+}
+
+function isScreenShareRtcMode(rtcMode: string) {
+  const normalized = normalizeRtcMode(rtcMode);
+  return normalized === "screen_share" || normalized === "screen";
+}
+
+function isLiveRtcMode(rtcMode: string) {
+  const normalized = normalizeRtcMode(rtcMode);
+  return normalized === "solo_live"
+    || normalized === "solo_video_live"
+    || normalized === "live_pk"
+    || normalized === "live_video_pk";
+}
+
+function getDefaultRoomCapacityForMode(rtcMode: string) {
+  if (isOneToOneVoiceMode(rtcMode) || isOneToOneVideoMode(rtcMode)) {
+    return { maxParticipants: 2, maxMicCount: 2 };
+  }
+
+  return { maxParticipants: DEFAULT_ROOM_CAPACITY, maxMicCount: DEFAULT_ROOM_CAPACITY };
+}
+
+function normalizeRtcMode(rtcMode: string) {
+  return readString(rtcMode).toLowerCase() || "video";
+}
+
+function evaluateSecurityContent(text: string, category: string) {
+  const normalized = text.toLowerCase();
+  const signals: string[] = [];
+
+  if (/(?:kill|suicide|bomb|terror|weapon|shoot)/i.test(text)) {
+    signals.push("violence_or_self_harm");
+  }
+
+  if (/(?:password|otp|verification code|credit card|bank account|ssn|social security)/i.test(text)) {
+    signals.push("sensitive_data_request");
+  }
+
+  if (/(?:hate|slur|racial|abuse|harass)/i.test(text)) {
+    signals.push("harassment_or_hate");
+  }
+
+  if (/(.)\1{8,}/.test(normalized) || normalized.length > 1200) {
+    signals.push("spam_pattern");
+  }
+
+  const severity = signals.some((signal) => signal === "violence_or_self_harm" || signal === "sensitive_data_request")
+    ? "high"
+    : signals.length > 0
+      ? "medium"
+      : "low";
+
+  return {
+    allowed: signals.length === 0,
+    severity: severity as SecurityIncident["severity"],
+    reason: signals.length > 0
+      ? `Security check flagged ${category}: ${signals.join(", ")}`
+      : "Security check passed",
+    signals,
+  };
+}
+
+function recordSecurityIncident(input: Omit<SecurityIncident, "id" | "createdAt">) {
+  const incident: SecurityIncident = {
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+    ...input,
+  };
+
+  securityIncidents.push(incident);
+
+  if (securityIncidents.length > 1000) {
+    securityIncidents.splice(0, securityIncidents.length - 1000);
+  }
+
+  return incident;
+}
+
+function emitSecurityIncident(appId: string, roomId: string | undefined, incident: SecurityIncident) {
+  if (!roomId) {
+    return;
+  }
+
+  io.to(roomChannel(appId, roomId)).emit("security:incident", incident);
+}
+
+function readSecuritySeverity(value: unknown): SecurityIncident["severity"] | null {
+  const severity = readString(value).toLowerCase();
+
+  if (severity === "low" || severity === "medium" || severity === "high") {
+    return severity;
+  }
+
+  return null;
+}
+
+function getYoutubeRoomState(appId: string, roomId: string) {
+  const state = youtubeRoomStates.get(scopedKey(appId, roomId));
+  return state ? serializeYoutubeRoomState(state) : null;
+}
+
+function getLivePkState(appId: string, roomId: string) {
+  const state = livePkStates.get(scopedKey(appId, roomId));
+  return state ? serializeLivePkState(state) : null;
+}
+
+function serializeLivePkState(state: LivePkState) {
+  return {
+    appId: state.appId,
+    app_id: state.appId,
+    roomId: state.roomId,
+    room_id: Number.isFinite(Number(state.roomId)) ? Number(state.roomId) : state.roomId,
+    status: state.status,
+    hostUserId: state.hostUserId,
+    host_user_id: state.hostUserId,
+    opponentUserId: state.opponentUserId,
+    opponent_user_id: state.opponentUserId,
+    hostScore: state.hostScore,
+    host_score: state.hostScore,
+    opponentScore: state.opponentScore,
+    opponent_score: state.opponentScore,
+    startedAt: state.startedAt,
+    started_at: state.startedAt,
+    endedAt: state.endedAt,
+    ended_at: state.endedAt,
+    updatedAt: state.updatedAt,
+    updated_at: state.updatedAt,
+    metadata: state.metadata,
+  };
+}
+
+function canControlLive(participant: ParticipantState) {
+  return participant.permissions.includes("live_control")
+    || participant.permissions.includes("moderate")
+    || participant.role === "owner"
+    || participant.role === "admin";
+}
+
+function readLivePkStatus(value: unknown): LivePkState["status"] | null {
+  const status = readString(value).toLowerCase();
+
+  if (status === "idle" || status === "matching" || status === "active" || status === "ended") {
+    return status;
+  }
+
+  return null;
+}
+
+function readVideoEffectState(value: unknown, fallback: VideoEffectState = createDefaultVideoEffectState()) {
+  const record = readRecord(value) ?? {};
+
+  return {
+    filter: readString(record.filter) || fallback.filter,
+    aiFilter: readString(record.aiFilter) || readString(record.ai_filter) || fallback.aiFilter,
+    sticker: readString(record.sticker) || fallback.sticker,
+    faceDetectEnabled: readBoolean(
+      record.faceDetectEnabled ?? record.face_detect_enabled,
+      fallback.faceDetectEnabled,
+    ),
+    beautyEnabled: readBoolean(record.beautyEnabled ?? record.beauty_enabled, fallback.beautyEnabled),
+    beautyLevel: readEffectLevel(record.beautyLevel ?? record.beauty_level, fallback.beautyLevel),
+    smoothingLevel: readEffectLevel(record.smoothingLevel ?? record.smoothing_level, fallback.smoothingLevel),
+    whiteningLevel: readEffectLevel(record.whiteningLevel ?? record.whitening_level, fallback.whiteningLevel),
+    eyeLevel: readEffectLevel(record.eyeLevel ?? record.eye_level, fallback.eyeLevel),
+    faceSlimLevel: readEffectLevel(record.faceSlimLevel ?? record.face_slim_level, fallback.faceSlimLevel),
+    makeup: readRecord(record.makeup) ?? fallback.makeup,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function createDefaultVideoEffectState(): VideoEffectState {
+  return {
+    filter: "none",
+    aiFilter: "none",
+    sticker: "",
+    faceDetectEnabled: false,
+    beautyEnabled: false,
+    beautyLevel: 0,
+    smoothingLevel: 0,
+    whiteningLevel: 0,
+    eyeLevel: 0,
+    faceSlimLevel: 0,
+    makeup: {},
+  };
+}
+
+function readEffectLevel(value: unknown, fallback: number) {
+  const numberValue = typeof value === "number" ? value : Number(readString(value));
+
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+
+  return Math.min(100, Math.max(0, numberValue));
+}
+
+function serializeYoutubeRoomState(state: YoutubeRoomState) {
+  return {
+    appId: state.appId,
+    app_id: state.appId,
+    roomId: state.roomId,
+    room_id: Number.isFinite(Number(state.roomId)) ? Number(state.roomId) : state.roomId,
+    videoId: state.videoId,
+    video_id: state.videoId,
+    videoUrl: state.videoUrl,
+    video_url: state.videoUrl,
+    title: state.title,
+    playbackState: state.playbackState,
+    playback_state: state.playbackState,
+    positionSeconds: state.positionSeconds,
+    position_seconds: state.positionSeconds,
+    updatedAt: state.updatedAt,
+    updated_at: state.updatedAt,
+    updatedBy: state.updatedBy,
+    updated_by: state.updatedBy,
+  };
+}
+
+function canControlYoutube(participant: ParticipantState) {
+  return participant.permissions.includes("youtube_control")
+    || participant.permissions.includes("moderate")
+    || participant.role === "owner"
+    || participant.role === "admin"
+    || participant.role === "publisher";
+}
+
+function parseYoutubeVideoId(value: string) {
+  const input = readString(value);
+
+  if (!input) {
+    return "";
+  }
+
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) {
+    return input;
+  }
+
+  try {
+    const url = new URL(input);
+    const hostname = url.hostname.replace(/^www\./, "").toLowerCase();
+
+    if (hostname === "youtu.be") {
+      return parseYoutubePathId(url.pathname);
+    }
+
+    if (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) {
+      const queryVideoId = url.searchParams.get("v");
+
+      if (queryVideoId && /^[a-zA-Z0-9_-]{11}$/.test(queryVideoId)) {
+        return queryVideoId;
+      }
+
+      const pathParts = url.pathname.split("/").filter(Boolean);
+      const markerIndex = pathParts.findIndex((part) => ["embed", "shorts", "live"].includes(part));
+
+      if (markerIndex >= 0 && pathParts[markerIndex + 1]) {
+        return parseYoutubePathId(pathParts[markerIndex + 1]);
+      }
+    }
+  } catch (_error) {
+    return "";
+  }
+
+  return "";
+}
+
+function parseYoutubePathId(pathOrId: string) {
+  const candidate = readString(pathOrId).split(/[/?#]/)[0] ?? "";
+  return /^[a-zA-Z0-9_-]{11}$/.test(candidate) ? candidate : "";
+}
+
+function readYoutubePlaybackState(value: unknown): YoutubeRoomState["playbackState"] | null {
+  const state = readString(value).toLowerCase();
+
+  if (state === "ready" || state === "playing" || state === "paused" || state === "stopped") {
+    return state;
+  }
+
+  return null;
+}
+
+function readNonNegativeNumber(value: unknown, fallback: number) {
+  const numberValue = typeof value === "number" ? value : Number(readString(value));
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : fallback;
+}
+
 function getRoomState(appId: string, roomId: string) {
   const room = ensureRoom(appId, roomId);
   const participants = Array.from(getParticipants(appId, roomId).values()).map(serializeParticipant);
@@ -1524,6 +2329,12 @@ function serializeParticipant(participant: ParticipantState) {
     camera_enabled: participant.cameraEnabled,
     speakerEnabled: participant.speakerEnabled,
     speaker_enabled: participant.speakerEnabled,
+    noiseCancellationEnabled: participant.noiseCancellationEnabled,
+    noise_cancellation_enabled: participant.noiseCancellationEnabled,
+    screenShareEnabled: participant.screenShareEnabled,
+    screen_share_enabled: participant.screenShareEnabled,
+    videoEffects: participant.videoEffects,
+    video_effects: participant.videoEffects,
     permissions: participant.permissions,
     joinedAt: participant.joinedAt,
     joined_at: participant.joinedAt,

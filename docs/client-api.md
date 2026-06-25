@@ -94,7 +94,281 @@ curl -X POST http://localhost:4000/client/rtc/token \
 
 Send the returned `access_token` to the Android app.
 
-## 3. Android SDK Usage
+## 3. Normal Audio Room SDK
+
+Create audio rooms with `room_type: "voice"` and issue tokens with audio permissions only:
+
+```bash
+curl -X POST http://localhost:4000/client/rtc/token \
+  -H "Authorization: Bearer CLIENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_user_id": "user-123",
+    "room_id": "support-room-1",
+    "role": "publisher",
+    "rtc_mode": "voice",
+    "permissions": ["join", "publish_audio", "chat", "signal"]
+  }'
+```
+
+Android audio-only join:
+
+```kotlin
+lateinit var rtc: RtcServiceSdk
+
+rtc = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config.audioRoom(
+        signalingUrl = "https://your-rtc-domain.example",
+        accessToken = tokenFromYourBackend,
+        roomId = "support-room-1"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onRoomJoined(roomId: String) {
+            // The backend accepted the join.
+        }
+
+        override fun onRtcConnectionIndicatorChanged(
+            indicator: RtcServiceSdk.ConnectionIndicator
+        ) {
+            // Show connecting, in-room, waiting-for-peer, peer-connected, or failed.
+        }
+
+        override fun onRoomError(message: String) {
+            // Show or log the room error.
+        }
+    }
+)
+
+rtc.connectAndJoin()
+```
+
+The SDK also exposes `rtc.joinAudioRoom(roomId)` when you already created a connected SDK instance.
+
+## 4. One-To-One Voice Calling
+
+Use `rtc_mode: "voice_call"` for private one-to-one voice rooms. The service caps these rooms at two participants and two microphone seats even if a larger capacity is sent by mistake.
+
+```bash
+curl -X POST http://localhost:4000/client/rtc/token \
+  -H "Authorization: Bearer CLIENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_user_id": "caller-123",
+    "room_id": "call-user-123-user-456",
+    "role": "publisher",
+    "rtc_mode": "voice_call",
+    "permissions": ["join", "publish_audio", "chat", "signal"]
+  }'
+```
+
+Android:
+
+```kotlin
+val rtc = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config.voiceCall(
+        signalingUrl = "https://your-rtc-domain.example",
+        accessToken = tokenFromYourBackend,
+        roomId = "call-user-123-user-456"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onPeerJoined(peerId: String) {
+            // Remote caller is available.
+        }
+
+        override fun onRemoteStreamForPeer(peerId: String, stream: org.webrtc.MediaStream) {
+            // Remote audio stream is connected.
+        }
+    }
+)
+
+rtc.connectAndJoin()
+```
+
+## 5. Group Voice Chat
+
+Use `rtc_mode: "group_voice"` for audio-only rooms with multiple peers. The SDK creates one WebRTC peer connection per remote participant.
+
+```kotlin
+val rtc = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config.groupVoice(
+        signalingUrl = "https://your-rtc-domain.example",
+        accessToken = tokenFromYourBackend,
+        roomId = "group-voice-room-1"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onRemoteStreamForPeer(peerId: String, stream: org.webrtc.MediaStream) {
+            // Handle each participant's remote audio stream.
+        }
+
+        override fun onParticipantUpdated(peerId: String, micEnabled: Boolean, cameraEnabled: Boolean) {
+            // Update mic badges.
+        }
+    }
+)
+
+rtc.connectAndJoin()
+```
+
+## 6. AI Security Foundation
+
+The service blocks synced users whose status is not `active`, records incidents, and exposes security checks/reports over Socket.IO.
+
+```kotlin
+rtc.checkSecurity("message or moderation text")
+rtc.reportSecurityIncident(
+    message = "User is abusing voice room",
+    category = "voice_abuse",
+    targetUserId = "user-456",
+    severity = "high"
+)
+```
+
+Listen with:
+
+```kotlin
+override fun onSecurityChecked(result: org.json.JSONObject) {}
+override fun onSecurityIncident(incident: org.json.JSONObject) {}
+```
+
+Client backends can inspect recent incidents with `GET /client/security/incidents`.
+
+## 7. Video SDK Modes
+
+Video rooms use the same signaling layer as voice, with one peer connection per remote participant:
+
+```kotlin
+val rtc = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config.groupVideo(
+        signalingUrl = "https://your-rtc-domain.example",
+        accessToken = tokenFromYourBackend,
+        roomId = "group-video-room-1"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onRemoteStreamForPeer(peerId: String, stream: org.webrtc.MediaStream) {}
+        override fun onVideoEffectsChanged(peerId: String, effects: org.json.JSONObject) {}
+    }
+)
+
+rtc.connectAndJoin()
+```
+
+Available Android helpers:
+
+- `RtcServiceSdk.Config.videoCall(...)` and `rtc.joinVideoCall(...)` for one-to-one video calls.
+- `RtcServiceSdk.Config.groupVideo(...)` and `rtc.joinGroupVideoRoom(...)` for normal group video chat.
+- `RtcServiceSdk.Config.soloVideoLive(...)` and `rtc.joinSoloVideoLive(...)` for solo live video.
+- `RtcServiceSdk.Config.livePk(...)` and `rtc.joinLivePkRoom(...)` for live PK rooms.
+
+Use `rtc_mode` values `video_call`, `group_video`, `solo_live`, or `live_pk` when issuing tokens. One-to-one video rooms are capped to two participants by the service, and the default video token helpers include `screen_share` for screen sharing.
+
+## 8. Live Video PK
+
+Live PK state is synchronized through the room:
+
+```kotlin
+rtc.startLivePk(opponentUserId = "user-456")
+rtc.updateLivePkScore(hostScore = 120, opponentScore = 100)
+rtc.endLivePk()
+```
+
+Listen with:
+
+```kotlin
+override fun onLivePkStateChanged(state: org.json.JSONObject) {}
+```
+
+## 9. Screen Share
+
+Web SDK clients can use browser screen sharing with `startScreenShare()` / `stopScreenShare()`. Android apps should provide their own MediaProjection screen capturer and call:
+
+```kotlin
+rtc.setScreenShareEnabled(true)
+rtc.setScreenShareEnabled(false)
+```
+
+The backend requires the `screen_share` permission when enabling screen share and broadcasts `screen:state`.
+
+## 10. Video Effects, Beauty, Stickers, And Face Detect State
+
+The SDK synchronizes effect settings so all clients and admin panels see the active filter/beauty/sticker state:
+
+```kotlin
+rtc.setVideoEffects(
+    org.json.JSONObject()
+        .put("filter", "soft")
+        .put("aiFilter", "portrait")
+        .put("sticker", "crown")
+        .put("faceDetectEnabled", true)
+        .put("beautyEnabled", true)
+        .put("beautyLevel", 65)
+        .put("smoothingLevel", 50)
+        .put("whiteningLevel", 35)
+)
+```
+
+The RTC service synchronizes this state; the host Android app still applies the actual camera/render pipeline for beauty, makeup, stickers, and face detection.
+
+## 11. YouTube Room SDK
+
+Create or token a room with `rtc_mode: "youtube"` and include `youtube_control` for hosts/admins:
+
+```bash
+curl -X POST http://localhost:4000/client/rtc/token \
+  -H "Authorization: Bearer CLIENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_user_id": "host-123",
+    "room_id": "watch-room-1",
+    "role": "publisher",
+    "rtc_mode": "youtube",
+    "permissions": ["join", "publish_audio", "chat", "signal", "youtube_control"]
+  }'
+```
+
+Android apps render YouTube with their own player view and use the SDK to synchronize playback:
+
+```kotlin
+rtc = RtcServiceSdk(
+    context = this,
+    config = RtcServiceSdk.Config.audioRoom(
+        signalingUrl = "https://your-rtc-domain.example",
+        accessToken = tokenFromYourBackend,
+        roomId = "watch-room-1"
+    ),
+    listener = object : RtcServiceSdk.Listener {
+        override fun onYoutubeStateChanged(state: org.json.JSONObject) {
+            // Read videoId, playbackState, and positionSeconds, then update your player.
+        }
+    }
+)
+
+rtc.connectAndJoin()
+rtc.setYoutubeVideo("https://www.youtube.com/watch?v=dQw4w9WgXcQ", title = "Room video")
+rtc.playYoutube(positionSeconds = 0.0)
+rtc.pauseYoutube(positionSeconds = 12.5)
+rtc.seekYoutube(positionSeconds = 45.0)
+```
+
+The backend broadcasts `youtube:state` to every participant in the room. Late joiners receive the latest state with `room:joined`.
+
+## 12. Noise Cancellation Button
+
+Android and web SDKs expose a direct toggle:
+
+```kotlin
+rtc.setNoiseCancellationEnabled(true)
+rtc.setNoiseCancellationEnabled(false)
+```
+
+The Android SDK creates WebRTC audio sources with echo cancellation, auto gain control, high-pass filtering, and noise suppression constraints. If the user toggles while already connected, the SDK replaces the local audio track and renegotiates with the peer.
+
+Room state includes `noiseCancellationEnabled` / `noise_cancellation_enabled` for each participant.
+
+## 13. Android Video SDK Usage
 
 Add the built SDK AAR to the client Android app, then connect using the token returned by the client's backend.
 
@@ -112,7 +386,11 @@ rtc = RtcServiceSdk(
     ),
     listener = object : RtcServiceSdk.Listener {
         override fun onConnected(socketId: String) {
-            rtc.joinRoom()
+            // Connected to signaling.
+        }
+
+        override fun onRoomJoined(roomId: String) {
+            // The backend accepted the join.
         }
 
         override fun onRemoteStream(stream: org.webrtc.MediaStream) {
@@ -126,10 +404,10 @@ rtc = RtcServiceSdk(
 )
 
 rtc.attachRenderers(localRenderer, remoteRenderer)
-rtc.connect()
+rtc.connectAndJoin()
 ```
 
-## 4. Build SDK And APK
+## 14. Build SDK And APK
 
 Build the reusable RTC Android SDK:
 

@@ -7,6 +7,34 @@ export const RTC_DEFAULT_API_KEY =
   import.meta.env.VITE_RTC_API_KEY ?? "rtc-dev-api-key";
 
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+export const RTC_AUDIO_ROOM_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
+export const RTC_ONE_TO_ONE_VOICE_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
+export const RTC_GROUP_VOICE_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
+export const RTC_SCREEN_SHARE_PERMISSIONS = ["join", "publish_audio", "publish_video", "screen_share", "chat", "signal"];
+export const RTC_VIDEO_ROOM_PERMISSIONS = [
+  "join",
+  "publish_audio",
+  "publish_video",
+  "screen_share",
+  "chat",
+  "signal",
+];
+export const RTC_LIVE_VIDEO_PERMISSIONS = [
+  "join",
+  "publish_audio",
+  "publish_video",
+  "screen_share",
+  "chat",
+  "signal",
+  "live_control",
+];
+export const RTC_YOUTUBE_ROOM_PERMISSIONS = [
+  "join",
+  "publish_audio",
+  "chat",
+  "signal",
+  "youtube_control",
+];
 
 export async function createRtcToken({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
@@ -14,7 +42,7 @@ export async function createRtcToken({
   userId,
   role = "publisher",
   rtcMode = "video",
-  permissions = ["join", "publish_audio", "publish_video", "chat", "signal"],
+  permissions = getDefaultPermissionsForMode(rtcMode),
 } = {}) {
   return requestJson(`${apiUrl}/rtc-token`, {
     method: "POST",
@@ -89,6 +117,84 @@ export async function createRoom({
   });
 }
 
+export async function createAudioRoom(options = {}) {
+  return createRoom({
+    roomType: "voice",
+    maxParticipants: 8,
+    maxMicCount: 8,
+    ...options,
+  });
+}
+
+export async function createOneToOneVoiceRoom(options = {}) {
+  return createRoom({
+    roomType: "voice_call",
+    maxParticipants: 2,
+    maxMicCount: 2,
+    ...options,
+  });
+}
+
+export async function createGroupVoiceRoom(options = {}) {
+  return createRoom({
+    roomType: "group_voice",
+    maxParticipants: 8,
+    maxMicCount: 8,
+    ...options,
+  });
+}
+
+export async function createYoutubeRoom(options = {}) {
+  const { metadata = {}, ...roomOptions } = options;
+
+  return createRoom({
+    roomType: "youtube",
+    maxParticipants: 8,
+    maxMicCount: 8,
+    ...roomOptions,
+    metadata: {
+      provider: "youtube",
+      ...metadata,
+    },
+  });
+}
+
+export async function createVideoCallRoom(options = {}) {
+  return createRoom({
+    roomType: "video_call",
+    maxParticipants: 2,
+    maxMicCount: 2,
+    ...options,
+  });
+}
+
+export async function createGroupVideoRoom(options = {}) {
+  return createRoom({
+    roomType: "group_video",
+    maxParticipants: 8,
+    maxMicCount: 8,
+    ...options,
+  });
+}
+
+export async function createSoloVideoLiveRoom(options = {}) {
+  return createRoom({
+    roomType: "solo_live",
+    maxParticipants: 100,
+    maxMicCount: 1,
+    ...options,
+  });
+}
+
+export async function createLivePkRoom(options = {}) {
+  return createRoom({
+    roomType: "live_pk",
+    maxParticipants: 100,
+    maxMicCount: 2,
+    ...options,
+  });
+}
+
 export async function issueRtcToken({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   apiKey = RTC_DEFAULT_API_KEY,
@@ -97,7 +203,7 @@ export async function issueRtcToken({
   roomId,
   role = "publisher",
   rtcMode = "video",
-  permissions = ["join", "publish_audio", "publish_video", "chat", "signal"],
+  permissions = getDefaultPermissionsForMode(rtcMode),
 } = {}) {
   return requestJson(`${apiUrl}/client/rtc/token`, {
     method: "POST",
@@ -113,6 +219,70 @@ export async function issueRtcToken({
   });
 }
 
+export async function issueAudioRoomToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "voice",
+    permissions: RTC_AUDIO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueOneToOneVoiceToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "voice_call",
+    permissions: RTC_ONE_TO_ONE_VOICE_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueGroupVoiceToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "group_voice",
+    permissions: RTC_GROUP_VOICE_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueYoutubeRoomToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "youtube",
+    permissions: RTC_YOUTUBE_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueVideoCallToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "video_call",
+    permissions: RTC_VIDEO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueGroupVideoToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "group_video",
+    permissions: RTC_VIDEO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueSoloVideoLiveToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "solo_live",
+    permissions: RTC_LIVE_VIDEO_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function issueLivePkToken(options = {}) {
+  return issueRtcToken({
+    rtcMode: "live_pk",
+    permissions: RTC_LIVE_VIDEO_PERMISSIONS,
+    ...options,
+  });
+}
+
 export async function startRtcSession({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   apiKey = RTC_DEFAULT_API_KEY,
@@ -121,7 +291,8 @@ export async function startRtcSession({
   role = "publisher",
   rtcMode = "video",
   micEnabled = true,
-  cameraEnabled = true,
+  cameraEnabled = !isAudioOnlyMode(rtcMode),
+  noiseCancellationEnabled = true,
   permissions,
 } = {}) {
   return requestJson(`${apiUrl}/client/rtc/session/start`, {
@@ -134,8 +305,89 @@ export async function startRtcSession({
       rtc_mode: rtcMode,
       mic_enabled: micEnabled,
       camera_enabled: cameraEnabled,
+      noise_cancellation_enabled: noiseCancellationEnabled,
       ...(permissions ? { permissions } : {}),
     },
+  });
+}
+
+export async function startAudioRoomSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "voice",
+    micEnabled: true,
+    cameraEnabled: false,
+    permissions: RTC_AUDIO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startOneToOneVoiceSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "voice_call",
+    micEnabled: true,
+    cameraEnabled: false,
+    permissions: RTC_ONE_TO_ONE_VOICE_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startGroupVoiceSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "group_voice",
+    micEnabled: true,
+    cameraEnabled: false,
+    permissions: RTC_GROUP_VOICE_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startVideoCallSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "video_call",
+    micEnabled: true,
+    cameraEnabled: true,
+    permissions: RTC_VIDEO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startGroupVideoSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "group_video",
+    micEnabled: true,
+    cameraEnabled: true,
+    permissions: RTC_VIDEO_ROOM_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startSoloVideoLiveSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "solo_live",
+    micEnabled: true,
+    cameraEnabled: true,
+    permissions: RTC_LIVE_VIDEO_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startLivePkSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "live_pk",
+    micEnabled: true,
+    cameraEnabled: true,
+    permissions: RTC_LIVE_VIDEO_PERMISSIONS,
+    ...options,
+  });
+}
+
+export async function startYoutubeRoomSession(options = {}) {
+  return startRtcSession({
+    rtcMode: "youtube",
+    micEnabled: true,
+    cameraEnabled: false,
+    permissions: RTC_YOUTUBE_ROOM_PERMISSIONS,
+    ...options,
   });
 }
 
@@ -171,9 +423,13 @@ export class RtcServiceClient extends EventTarget {
     this.signalingUrl = signalingUrl;
     this.token = token;
     this.iceServers = iceServers;
-    this.mediaConstraints = mediaConstraints;
+    this.isNoiseCancellationEnabled = getAudioProcessingEnabled(mediaConstraints);
+    this.mediaConstraints = withNoiseCancellation(mediaConstraints, this.isNoiseCancellationEnabled);
 
     this.socket = null;
+    this.peerConnections = new Map();
+    this.remoteStreams = new Map();
+    this.pendingCandidatesByPeer = new Map();
     this.peerConnection = null;
     this.localStream = null;
     this.remoteStream = null;
@@ -182,9 +438,13 @@ export class RtcServiceClient extends EventTarget {
     this.pendingCandidates = [];
     this.localVideo = null;
     this.remoteVideo = null;
-    this.isMicEnabled = true;
-    this.isCameraEnabled = true;
+    this.isMicEnabled = mediaConstraints.audio !== false;
+    this.isCameraEnabled = mediaConstraints.video !== false;
     this.isSpeakerEnabled = true;
+    this.isScreenSharing = false;
+    this.videoEffects = createDefaultVideoEffects();
+    this.youtubeState = null;
+    this.livePkState = null;
   }
 
   on(eventName, handler) {
@@ -250,16 +510,137 @@ export class RtcServiceClient extends EventTarget {
     }
 
     await this.connect();
-    await this.ensureLocalStream();
 
-    this.currentRoomId = trimmedRoomId;
+    this.isMicEnabled = mediaState.micEnabled ?? this.isMicEnabled;
+    this.isCameraEnabled = mediaState.cameraEnabled ?? this.isCameraEnabled;
+    this.isSpeakerEnabled = mediaState.speakerEnabled ?? this.isSpeakerEnabled;
+    this.isNoiseCancellationEnabled =
+      mediaState.noiseCancellationEnabled ?? this.isNoiseCancellationEnabled;
+    this.isScreenSharing = mediaState.screenShareEnabled ?? this.isScreenSharing;
+    this.videoEffects = {
+      ...this.videoEffects,
+      ...(mediaState.videoEffects ?? {}),
+    };
+    this.mediaConstraints = withNoiseCancellation(
+      this.mediaConstraints,
+      this.isNoiseCancellationEnabled,
+    );
+
+    await this.ensureLocalStream();
+    this.applyLocalTrackState();
+
+    const joinAck = new Promise((resolve, reject) => {
+      const handleJoined = (event) => {
+        cleanup();
+        resolve(event);
+      };
+
+      const handleRoomError = (event) => {
+        cleanup();
+        reject(new Error(event?.message ?? "Unable to join room"));
+      };
+
+      const handleRoomFull = (event) => {
+        cleanup();
+        reject(new Error(event?.message ?? "Room is full"));
+      };
+
+      const cleanup = () => {
+        this.socket.off("room:joined", handleJoined);
+        this.socket.off("room:error", handleRoomError);
+        this.socket.off("room:full", handleRoomFull);
+      };
+
+      this.socket.once("room:joined", handleJoined);
+      this.socket.once("room:error", handleRoomError);
+      this.socket.once("room:full", handleRoomFull);
+    });
+
     this.socket.emit("room:join", {
       roomId: trimmedRoomId,
-      micEnabled: mediaState.micEnabled ?? this.isMicEnabled,
-      cameraEnabled: mediaState.cameraEnabled ?? this.isCameraEnabled,
-      speakerEnabled: mediaState.speakerEnabled ?? this.isSpeakerEnabled,
+      micEnabled: this.isMicEnabled,
+      cameraEnabled: this.isCameraEnabled,
+      noiseCancellationEnabled: this.isNoiseCancellationEnabled,
+      screenShareEnabled: this.isScreenSharing,
+      videoEffects: this.videoEffects,
+      speakerEnabled: this.isSpeakerEnabled,
     });
     this.emitSdkEvent("joining-room", { roomId: trimmedRoomId });
+
+    return joinAck;
+  }
+
+  async joinAudioRoom(roomId, mediaState = {}) {
+    this.mediaConstraints = {
+      ...this.mediaConstraints,
+      audio: this.mediaConstraints.audio ?? true,
+      video: false,
+    };
+    this.mediaConstraints = withNoiseCancellation(
+      this.mediaConstraints,
+      this.isNoiseCancellationEnabled,
+    );
+    this.isCameraEnabled = false;
+
+    return this.joinRoom(roomId, {
+      ...mediaState,
+      cameraEnabled: false,
+    });
+  }
+
+  async joinVoiceCall(roomId, mediaState = {}) {
+    return this.joinAudioRoom(roomId, mediaState);
+  }
+
+  async joinGroupVoiceRoom(roomId, mediaState = {}) {
+    return this.joinAudioRoom(roomId, mediaState);
+  }
+
+  async joinYoutubeRoom(roomId, mediaState = {}) {
+    this.mediaConstraints = {
+      ...this.mediaConstraints,
+      audio: this.mediaConstraints.audio ?? true,
+      video: false,
+    };
+    this.mediaConstraints = withNoiseCancellation(
+      this.mediaConstraints,
+      this.isNoiseCancellationEnabled,
+    );
+    this.isCameraEnabled = false;
+
+    return this.joinRoom(roomId, {
+      ...mediaState,
+      cameraEnabled: false,
+    });
+  }
+
+  async joinVideoRoom(roomId, mediaState = {}) {
+    this.mediaConstraints = {
+      ...this.mediaConstraints,
+      video: mediaState.cameraEnabled === false ? false : true,
+    };
+    this.isCameraEnabled = mediaState.cameraEnabled ?? true;
+
+    return this.joinRoom(roomId, {
+      ...mediaState,
+      cameraEnabled: this.isCameraEnabled,
+    });
+  }
+
+  async joinVideoCall(roomId, mediaState = {}) {
+    return this.joinVideoRoom(roomId, mediaState);
+  }
+
+  async joinGroupVideoRoom(roomId, mediaState = {}) {
+    return this.joinVideoRoom(roomId, mediaState);
+  }
+
+  async joinSoloVideoLive(roomId, mediaState = {}) {
+    return this.joinVideoRoom(roomId, mediaState);
+  }
+
+  async joinLivePkRoom(roomId, mediaState = {}) {
+    return this.joinVideoRoom(roomId, mediaState);
   }
 
   leaveRoom({ stopMedia = false } = {}) {
@@ -335,6 +716,30 @@ export class RtcServiceClient extends EventTarget {
     this.emitMediaState();
   }
 
+  async setNoiseCancellationEnabled(enabled) {
+    this.isNoiseCancellationEnabled = enabled;
+    this.mediaConstraints = withNoiseCancellation(this.mediaConstraints, enabled);
+
+    const audioTracks = this.localStream?.getAudioTracks() ?? [];
+
+    await Promise.all(
+      audioTracks.map(async (track) => {
+        if (typeof track.applyConstraints !== "function") {
+          return;
+        }
+
+        await track.applyConstraints({
+          noiseSuppression: enabled,
+          echoCancellation: true,
+          autoGainControl: true,
+        });
+      }),
+    );
+
+    this.emitMediaState();
+    this.emitSdkEvent("noise-cancellation-changed", { enabled });
+  }
+
   async switchCamera({ facingMode = "user" } = {}) {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Camera is not available in this browser");
@@ -351,32 +756,70 @@ export class RtcServiceClient extends EventTarget {
       throw new Error("No video track is available");
     }
 
-    const [oldVideoTrack] = this.localStream?.getVideoTracks() ?? [];
-    const sender = this.peerConnection
-      ?.getSenders()
-      .find((item) => item.track?.kind === "video");
-
-    if (sender) {
-      await sender.replaceTrack(nextVideoTrack);
-    }
-
-    oldVideoTrack?.stop();
-    this.replaceTrackInLocalStream(oldVideoTrack, nextVideoTrack);
+    await this.replaceOutgoingVideoTrack(nextVideoTrack);
     nextStream.getAudioTracks().forEach((track) => track.stop());
     this.setCameraEnabled(this.isCameraEnabled);
 
-    if (this.localVideo) {
-      this.localVideo.srcObject = this.localStream;
+    this.emitSdkEvent("camera-switched", { facingMode });
+  }
+
+  async startScreenShare({ audio = false } = {}) {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen sharing is not available in this browser");
     }
 
-    this.emitSdkEvent("camera-switched", { facingMode });
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio,
+    });
+    const [screenTrack] = displayStream.getVideoTracks();
+
+    if (!screenTrack) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      throw new Error("No screen video track is available");
+    }
+
+    await this.replaceOutgoingVideoTrack(screenTrack);
+    this.isScreenSharing = true;
+    screenTrack.onended = () => {
+      this.stopScreenShare().catch((error) => {
+        this.emitSdkEvent("error", { message: getErrorMessage(error) });
+      });
+    };
+    this.emitScreenShareState(true);
+    this.emitSdkEvent("screen-share-started", { stream: displayStream });
+    return displayStream;
+  }
+
+  async stopScreenShare({ facingMode = "user" } = {}) {
+    if (!this.isScreenSharing) {
+      return;
+    }
+
+    const nextStream = await navigator.mediaDevices.getUserMedia({
+      ...this.mediaConstraints,
+      video: { facingMode },
+      audio: false,
+    });
+    const [cameraTrack] = nextStream.getVideoTracks();
+
+    if (!cameraTrack) {
+      nextStream.getTracks().forEach((track) => track.stop());
+      throw new Error("No camera video track is available");
+    }
+
+    await this.replaceOutgoingVideoTrack(cameraTrack);
+    nextStream.getAudioTracks().forEach((track) => track.stop());
+    this.isScreenSharing = false;
+    this.emitScreenShareState(false);
+    this.emitSdkEvent("screen-share-stopped", {});
   }
 
   disconnect() {
     this.socket?.disconnect();
     this.socket = null;
     this.currentRoomId = null;
-    this.closePeerConnection();
+    this.closePeerConnections();
   }
 
   destroy() {
@@ -404,7 +847,7 @@ export class RtcServiceClient extends EventTarget {
 
     this.socket.on("room:left", (event) => {
       this.currentRoomId = null;
-      this.closePeerConnection();
+      this.closePeerConnections();
       this.emitSdkEvent("room-left", event);
     });
 
@@ -422,6 +865,42 @@ export class RtcServiceClient extends EventTarget {
 
     this.socket.on("participant:left", (event) => {
       this.emitSdkEvent("participant-left", event);
+    });
+
+    this.socket.on("youtube:state", (event) => {
+      this.youtubeState = event ?? null;
+      this.emitSdkEvent("youtube-state", event);
+    });
+
+    this.socket.on("youtube:error", (event) => {
+      this.emitSdkEvent("youtube-error", {
+        message: event?.message ?? "Unable to update YouTube room",
+      });
+    });
+
+    this.socket.on("screen:state", (event) => {
+      this.emitSdkEvent("screen-state", event);
+    });
+
+    this.socket.on("video:effects", (event) => {
+      if (event?.participant?.socketId === this.socket.id || event?.participant?.socket_id === this.socket.id) {
+        this.videoEffects = event.effects ?? this.videoEffects;
+      }
+
+      this.emitSdkEvent("video-effects", event);
+    });
+
+    this.socket.on("live:pk:state", (event) => {
+      this.livePkState = event ?? null;
+      this.emitSdkEvent("live-pk-state", event);
+    });
+
+    this.socket.on("security:checked", (event) => {
+      this.emitSdkEvent("security-checked", event);
+    });
+
+    this.socket.on("security:incident", (event) => {
+      this.emitSdkEvent("security-incident", event);
     });
 
     this.socket.on("room:error", (event) => {
@@ -444,14 +923,14 @@ export class RtcServiceClient extends EventTarget {
     });
 
     this.socket.on("existing-users", async (users) => {
-      const [peerId] = Array.isArray(users) ? users : [];
+      const peerIds = Array.isArray(users) ? users : [];
 
-      if (!peerId) {
+      if (peerIds.length === 0) {
         this.emitSdkEvent("waiting-for-peer");
         return;
       }
 
-      await this.createOffer(peerId);
+      await Promise.all(peerIds.map((peerId) => this.createOffer(peerId)));
     });
 
     this.socket.on("user-joined", (peerId) => {
@@ -460,10 +939,8 @@ export class RtcServiceClient extends EventTarget {
     });
 
     this.socket.on("user-left", (peerId) => {
-      if (peerId === this.remotePeerId) {
-        this.closePeerConnection();
-        this.emitSdkEvent("peer-left", { peerId });
-      }
+      this.closePeerConnection(peerId);
+      this.emitSdkEvent("peer-left", { peerId });
     });
 
     this.socket.on("signal", async ({ from, data } = {}) => {
@@ -482,18 +959,18 @@ export class RtcServiceClient extends EventTarget {
   async createPeerConnection(peerId) {
     const localStream = await this.ensureLocalStream();
 
-    if (this.peerConnection && this.remotePeerId === peerId) {
-      return this.peerConnection;
+    if (this.peerConnections.has(peerId)) {
+      return this.peerConnections.get(peerId);
     }
 
-    this.closePeerConnection();
     this.remotePeerId = peerId;
 
     const peerConnection = new RTCPeerConnection({
       iceServers: this.iceServers,
     });
 
-    this.peerConnection = peerConnection;
+    this.peerConnections.set(peerId, peerConnection);
+    this.peerConnection = this.peerConnection ?? peerConnection;
 
     localStream.getTracks().forEach((track) => {
       peerConnection.addTrack(track, localStream);
@@ -516,17 +993,19 @@ export class RtcServiceClient extends EventTarget {
       const [remoteStream] = streams;
 
       this.remoteStream = remoteStream ?? null;
+      this.remoteStreams.set(peerId, remoteStream ?? null);
 
       if (this.remoteVideo && remoteStream) {
         this.remoteVideo.srcObject = remoteStream;
         this.remoteVideo.muted = !this.isSpeakerEnabled;
       }
 
-      this.emitSdkEvent("remote-stream", { stream: remoteStream });
+      this.emitSdkEvent("remote-stream", { peerId, stream: remoteStream });
     };
 
     peerConnection.onconnectionstatechange = () => {
       this.emitSdkEvent("connection-state", {
+        peerId,
         state: peerConnection.connectionState,
       });
     };
@@ -561,7 +1040,7 @@ export class RtcServiceClient extends EventTarget {
       await peerConnection.setRemoteDescription(
         new RTCSessionDescription({ type: "offer", sdp: signal.sdp }),
       );
-      await this.flushPendingCandidates(peerConnection);
+      await this.flushPendingCandidates(peerId, peerConnection);
 
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
@@ -579,7 +1058,7 @@ export class RtcServiceClient extends EventTarget {
       await peerConnection.setRemoteDescription(
         new RTCSessionDescription({ type: "answer", sdp: signal.sdp }),
       );
-      await this.flushPendingCandidates(peerConnection);
+      await this.flushPendingCandidates(peerId, peerConnection);
       this.emitSdkEvent("answer-received", { peerId });
       return;
     }
@@ -596,12 +1075,12 @@ export class RtcServiceClient extends EventTarget {
         return;
       }
 
-      this.pendingCandidates.push(candidate);
+      this.getPendingCandidates(peerId).push(candidate);
     }
   }
 
-  async flushPendingCandidates(peerConnection) {
-    const candidates = this.pendingCandidates.splice(0);
+  async flushPendingCandidates(peerId, peerConnection) {
+    const candidates = this.getPendingCandidates(peerId).splice(0);
 
     for (const candidate of candidates) {
       await peerConnection.addIceCandidate(candidate);
@@ -615,12 +1094,151 @@ export class RtcServiceClient extends EventTarget {
     });
   }
 
-  closePeerConnection() {
+  setYoutubeVideo({ videoId, videoUrl, title, positionSeconds = 0, playbackState = "ready" } = {}) {
+    this.updateYoutubeState({
+      videoId,
+      videoUrl,
+      title,
+      positionSeconds,
+      playbackState,
+    });
+  }
+
+  playYoutube(positionSeconds = this.youtubeState?.positionSeconds ?? 0) {
+    this.updateYoutubeState({
+      playbackState: "playing",
+      positionSeconds,
+    });
+  }
+
+  pauseYoutube(positionSeconds = this.youtubeState?.positionSeconds ?? 0) {
+    this.updateYoutubeState({
+      playbackState: "paused",
+      positionSeconds,
+    });
+  }
+
+  stopYoutube(positionSeconds = this.youtubeState?.positionSeconds ?? 0) {
+    this.updateYoutubeState({
+      playbackState: "stopped",
+      positionSeconds,
+    });
+  }
+
+  seekYoutube(positionSeconds) {
+    this.updateYoutubeState({
+      playbackState: this.youtubeState?.playbackState ?? "ready",
+      positionSeconds,
+    });
+  }
+
+  updateYoutubeState(payload = {}) {
+    this.socket?.emit("youtube:update", payload);
+  }
+
+  updateLivePkState(payload = {}) {
+    this.socket?.emit("live:pk:update", payload);
+  }
+
+  startLivePk({ opponentUserId, metadata = {} } = {}) {
+    this.updateLivePkState({
+      status: opponentUserId ? "active" : "matching",
+      opponentUserId,
+      metadata,
+    });
+  }
+
+  updateLivePkScore({ hostScore = 0, opponentScore = 0, metadata = {} } = {}) {
+    this.updateLivePkState({
+      status: this.livePkState?.status ?? "active",
+      hostScore,
+      opponentScore,
+      metadata,
+    });
+  }
+
+  endLivePk(metadata = {}) {
+    this.updateLivePkState({
+      status: "ended",
+      metadata,
+    });
+  }
+
+  setVideoEffects(effects = {}) {
+    this.videoEffects = {
+      ...this.videoEffects,
+      ...effects,
+    };
+    this.socket?.emit("video:effects", this.videoEffects);
+    this.emitMediaState();
+    this.emitSdkEvent("local-video-effects", this.videoEffects);
+  }
+
+  checkSecurity({ text, message, content, category = "text" } = {}) {
+    return new Promise((resolve) => {
+      this.socket?.emit(
+        "security:check",
+        {
+          text: text ?? message ?? content ?? "",
+          category,
+        },
+        resolve,
+      );
+    });
+  }
+
+  reportSecurityIncident({
+    category = "manual_report",
+    message = "Security report",
+    targetUserId,
+    severity,
+    blocked,
+    metadata,
+  } = {}) {
+    this.socket?.emit("security:report", {
+      category,
+      message,
+      targetUserId,
+      severity,
+      blocked,
+      metadata,
+    });
+  }
+
+  closePeerConnection(peerId) {
+    if (!peerId) {
+      this.closePeerConnections();
+      return;
+    }
+
+    const peerConnection = this.peerConnections.get(peerId);
+
+    peerConnection?.close();
+    this.peerConnections.delete(peerId);
+    this.remoteStreams.delete(peerId);
+    this.pendingCandidatesByPeer.delete(peerId);
+
+    if (this.remoteVideo && this.remotePeerId === peerId) {
+      this.remoteVideo.srcObject = null;
+    }
+
+    if (this.remotePeerId === peerId) {
+      const nextPeerId = this.peerConnections.keys().next().value;
+      this.remotePeerId = nextPeerId ?? null;
+      this.peerConnection = nextPeerId ? this.peerConnections.get(nextPeerId) : null;
+      this.remoteStream = nextPeerId ? this.remoteStreams.get(nextPeerId) : null;
+    }
+  }
+
+  closePeerConnections() {
     if (this.remoteVideo) {
       this.remoteVideo.srcObject = null;
     }
 
-    this.peerConnection?.close();
+    this.peerConnections.forEach((peerConnection) => peerConnection.close());
+    this.peerConnections.clear();
+    this.remoteStreams.clear();
+    this.pendingCandidatesByPeer.clear();
     this.peerConnection = null;
     this.remoteStream = null;
     this.remotePeerId = null;
@@ -649,6 +1267,9 @@ export class RtcServiceClient extends EventTarget {
     const state = {
       micEnabled: this.isMicEnabled,
       cameraEnabled: this.isCameraEnabled,
+      noiseCancellationEnabled: this.isNoiseCancellationEnabled,
+      screenShareEnabled: this.isScreenSharing,
+      videoEffects: this.videoEffects,
       speakerEnabled: this.isSpeakerEnabled,
     };
 
@@ -667,6 +1288,38 @@ export class RtcServiceClient extends EventTarget {
     }
 
     this.localStream.addTrack(nextTrack);
+  }
+
+  async replaceOutgoingVideoTrack(nextVideoTrack) {
+    const [oldVideoTrack] = this.localStream?.getVideoTracks() ?? [];
+    const senders = Array.from(this.peerConnections.values())
+      .map((peerConnection) => peerConnection.getSenders().find((item) => item.track?.kind === "video"))
+      .filter(Boolean);
+
+    await Promise.all(senders.map((sender) => sender.replaceTrack(nextVideoTrack)));
+
+    oldVideoTrack?.stop();
+    this.replaceTrackInLocalStream(oldVideoTrack, nextVideoTrack);
+
+    if (this.localVideo) {
+      this.localVideo.srcObject = this.localStream;
+    }
+  }
+
+  emitScreenShareState(enabled) {
+    this.socket?.emit("screen:state", {
+      enabled,
+      screenShareEnabled: enabled,
+    });
+    this.emitMediaState();
+  }
+
+  getPendingCandidates(peerId) {
+    if (!this.pendingCandidatesByPeer.has(peerId)) {
+      this.pendingCandidatesByPeer.set(peerId, []);
+    }
+
+    return this.pendingCandidatesByPeer.get(peerId);
   }
 
   emitSdkEvent(eventName, detail = {}) {
@@ -721,6 +1374,103 @@ function normalizeSignal(signal) {
   }
 
   return null;
+}
+
+function getDefaultPermissionsForMode(rtcMode, cameraEnabled = !isAudioOnlyMode(rtcMode)) {
+  if (isYoutubeMode(rtcMode)) {
+    return RTC_YOUTUBE_ROOM_PERMISSIONS;
+  }
+
+  if (isLiveMode(rtcMode)) {
+    return RTC_LIVE_VIDEO_PERMISSIONS;
+  }
+
+  if (isScreenShareMode(rtcMode)) {
+    return RTC_SCREEN_SHARE_PERMISSIONS;
+  }
+
+  if (cameraEnabled && !isAudioOnlyMode(rtcMode)) {
+    return RTC_VIDEO_ROOM_PERMISSIONS;
+  }
+
+  return RTC_AUDIO_ROOM_PERMISSIONS;
+}
+
+function isAudioOnlyMode(rtcMode) {
+  const normalized = String(rtcMode ?? "").trim().toLowerCase();
+  return normalized === "voice"
+    || normalized === "audio"
+    || normalized === "voice_call"
+    || normalized === "one_to_one_voice"
+    || normalized === "one_to_one_voice_call"
+    || normalized === "group_voice"
+    || normalized === "group_voice_chat"
+    || normalized === "youtube"
+    || normalized === "youtube_room";
+}
+
+function isYoutubeMode(rtcMode) {
+  const normalized = String(rtcMode ?? "").trim().toLowerCase();
+  return normalized === "youtube" || normalized === "youtube_room";
+}
+
+function isLiveMode(rtcMode) {
+  const normalized = String(rtcMode ?? "").trim().toLowerCase();
+  return normalized === "solo_live"
+    || normalized === "solo_video_live"
+    || normalized === "live_pk"
+    || normalized === "live_video_pk";
+}
+
+function isScreenShareMode(rtcMode) {
+  const normalized = String(rtcMode ?? "").trim().toLowerCase();
+  return normalized === "screen_share" || normalized === "screen";
+}
+
+function createDefaultVideoEffects() {
+  return {
+    filter: "none",
+    aiFilter: "none",
+    sticker: "",
+    faceDetectEnabled: false,
+    beautyEnabled: false,
+    beautyLevel: 0,
+    smoothingLevel: 0,
+    whiteningLevel: 0,
+    eyeLevel: 0,
+    faceSlimLevel: 0,
+    makeup: {},
+  };
+}
+
+function getAudioProcessingEnabled(mediaConstraints) {
+  if (mediaConstraints?.audio && typeof mediaConstraints.audio === "object") {
+    return mediaConstraints.audio.noiseSuppression !== false;
+  }
+
+  return mediaConstraints?.audio !== false;
+}
+
+function withNoiseCancellation(mediaConstraints, enabled) {
+  const nextConstraints = {
+    ...mediaConstraints,
+  };
+
+  if (nextConstraints.audio !== false) {
+    const audioConstraints =
+      nextConstraints.audio && typeof nextConstraints.audio === "object"
+        ? nextConstraints.audio
+        : {};
+
+    nextConstraints.audio = {
+      ...audioConstraints,
+      noiseSuppression: enabled,
+      echoCancellation: true,
+      autoGainControl: true,
+    };
+  }
+
+  return nextConstraints;
 }
 
 function getErrorMessage(error) {

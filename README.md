@@ -7,7 +7,7 @@ Local RTC service platform with:
 - Socket.IO signaling for authenticated WebRTC peers.
 - In-memory client app, API key, room, participant, media, and session state for local development.
 - Browser SDK and admin dashboard for generating RTC access tokens by app name.
-- Android WebRTC SDK wrapper for connect, join, leave, mute audio, toggle video, speakerphone, signaling, and stream callbacks.
+- Android WebRTC SDK wrapper for connect, join, leave, one-to-one voice/video calls, group voice/video chat, solo live, live PK state, screen-share state, video effects, mute audio, noise cancellation, toggle video, speakerphone, signaling, security events, and stream callbacks.
 
 ## Run Backend
 
@@ -86,6 +86,7 @@ Supported endpoints:
 - `GET /client/rtc/tokens`
 - `POST /client/rtc/token/verify`
 - `POST /client/rtc/token/revoke`
+- `GET /client/security/incidents`
 - `POST /client/rtc/session/start`
 - `POST /client/rtc/session/end`
 
@@ -96,6 +97,11 @@ Client emits:
 - `room:join`
 - `room:leave`
 - `media:state`
+- `screen:state`
+- `video:effects`
+- `live:pk:update`
+- `security:check`
+- `security:report`
 - `signal`
 
 Server emits:
@@ -111,5 +117,10 @@ Server emits:
 - `participant:joined`
 - `participant:updated`
 - `participant:left`
+- `screen:state`
+- `video:effects`
+- `live:pk:state`
+- `security:checked`
+- `security:incident`
 - `signal`
 - `signal:error`

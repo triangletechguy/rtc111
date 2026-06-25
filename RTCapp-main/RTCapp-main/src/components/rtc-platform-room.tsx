@@ -294,9 +294,9 @@ export default function RtcPlatformRoom({
           </TouchableOpacity>
         </View>
 
-        <View style={styles.videoShell}>
+        <View style={styles.videoShell} collapsable={false}>
           {RtcPlatformVideoView ? (
-            <RtcPlatformVideoView style={styles.videoView} />
+            <RtcPlatformVideoView style={styles.videoView} collapsable={false} />
           ) : (
             <View style={styles.videoFallback}>
               <Text style={styles.videoFallbackText}>Android RTC video view unavailable</Text>
@@ -485,10 +485,27 @@ function createStyles(accentColor: string) {
       paddingVertical: 6,
     },
     endSmallText: { color: "#fff", fontSize: 13, fontWeight: "700" },
-    videoShell: { flex: 1, backgroundColor: "#000" },
-    videoView: { flex: 1 },
-    videoFallback: {
+    videoShell: {
       flex: 1,
+      width: "100%",
+      minHeight: 0,
+      backgroundColor: "#000",
+      overflow: "hidden",
+    },
+    videoView: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: "#000",
+    },
+    videoFallback: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
       alignItems: "center",
       justifyContent: "center",
       padding: 20,
