@@ -121,8 +121,12 @@ function describeEvent(event: RtcPlatformEvent) {
 }
 
 async function createRtcAccessToken(roomId: string) {
-  if (!RTC_API_KEY) {
+  if (RTC_DASHBOARD_ACCESS_TOKEN) {
     return RTC_DASHBOARD_ACCESS_TOKEN;
+  }
+
+  if (!RTC_API_KEY) {
+    throw new Error("Set EXPO_PUBLIC_RTC_API_KEY or EXPO_PUBLIC_RTC_ACCESS_TOKEN before starting the RTC SDK.");
   }
 
   const response = await fetch(`${RTC_API_URL}/client/rtc/token`, {
