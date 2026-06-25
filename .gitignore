@@ -51,3 +51,6 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Codex local temp files
+.codex-tmp/

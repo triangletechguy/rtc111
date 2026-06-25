@@ -32,8 +32,8 @@ For real deployments set `RTC_ADMIN_KEY`, `RTC_API_KEY`, `RTC_TOKEN_SECRET`, and
 Create a client app and API key:
 
 ```bash
-curl -X POST http://localhost:4000/admin/apps \
-  -H "Authorization: Bearer rtc-admin-dev-key" \
+curl -X POST https://funint.online/admin/apps \
+  -H "Authorization: Bearer RTC_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"Client Android App","package_name":"com.client.app"}'
 ```
@@ -41,6 +41,9 @@ curl -X POST http://localhost:4000/admin/apps \
 The client's backend uses the returned `api_key` to sync users, create rooms, and issue short-lived RTC tokens. The Android APK should receive only the RTC access token, not the client API key.
 
 Full client/API/Android flow: [docs/client-api.md](docs/client-api.md).
+Client API handoff guide: [docs/client-api-handoff.md](docs/client-api-handoff.md).
+Android AAR integration guide: [docs/android-aar-sdk-integration.md](docs/android-aar-sdk-integration.md).
+API-only integration guide: [docs/api-only-integration.md](docs/api-only-integration.md).
 
 ## Run Web Admin Dashboard
 
@@ -57,7 +60,7 @@ Open the Vite URL to generate access tokens and review company-wise minute billi
 All `/admin/*` endpoints require:
 
 ```http
-Authorization: Bearer rtc-admin-dev-key
+Authorization: Bearer <RTC_ADMIN_KEY>
 ```
 
 Admin endpoints:
@@ -73,7 +76,7 @@ Admin endpoints:
 All `/client/*` endpoints require:
 
 ```http
-Authorization: Bearer rtc-dev-api-key
+Authorization: Bearer <CLIENT_API_KEY>
 ```
 
 Supported endpoints:

@@ -2,11 +2,13 @@
 
 This project lets a client integrate their own app with the RTC service, receive short-lived RTC access tokens, and build an Android APK that connects through the provided SDK.
 
+For focused setup guides, see [client-api-handoff.md](client-api-handoff.md) when sharing API access with a client, [api-only-integration.md](api-only-integration.md) for HTTP-only integrations, or [android-aar-sdk-integration.md](android-aar-sdk-integration.md) for Android `.aar` integrations.
+
 ## Services
 
-- Backend API and Socket.IO signaling: `http://localhost:4000`
-- Default platform admin key: `rtc-admin-dev-key`
-- Default local client API key: `rtc-dev-api-key`
+- Backend API and Socket.IO signaling: `https://funint.online`
+- Admin endpoints: `Authorization: Bearer <RTC_ADMIN_KEY>`
+- Client endpoints: `Authorization: Bearer <CLIENT_API_KEY>`
 
 Set these for deployed environments:
 
@@ -22,8 +24,8 @@ export RTC_BILLING_RATE_PER_MINUTE="0"
 Use the platform admin key to create an app for a customer/client. The response includes a client API key. Show or store this API key only once.
 
 ```bash
-curl -X POST http://localhost:4000/admin/apps \
-  -H "Authorization: Bearer rtc-admin-dev-key" \
+curl -X POST https://funint.online/admin/apps \
+  -H "Authorization: Bearer RTC_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Acme Android App",
@@ -54,7 +56,7 @@ The client API key should be used from the client's backend, not hard-coded insi
 Sync or create a user:
 
 ```bash
-curl -X POST http://localhost:4000/client/users/sync \
+curl -X POST https://funint.online/client/users/sync \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -67,7 +69,7 @@ curl -X POST http://localhost:4000/client/users/sync \
 Create a room:
 
 ```bash
-curl -X POST http://localhost:4000/client/rooms \
+curl -X POST https://funint.online/client/rooms \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,7 +83,7 @@ curl -X POST http://localhost:4000/client/rooms \
 Issue an RTC token for the mobile app:
 
 ```bash
-curl -X POST http://localhost:4000/client/rtc/token \
+curl -X POST https://funint.online/client/rtc/token \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -100,7 +102,7 @@ Send the returned `access_token` to the Android app.
 Create audio rooms with `room_type: "voice"` and issue tokens with audio permissions only:
 
 ```bash
-curl -X POST http://localhost:4000/client/rtc/token \
+curl -X POST https://funint.online/client/rtc/token \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -120,7 +122,7 @@ lateinit var rtc: RtcServiceSdk
 rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config.audioRoom(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "support-room-1"
     ),
@@ -151,7 +153,7 @@ The SDK also exposes `rtc.joinAudioRoom(roomId)` when you already created a conn
 Use `rtc_mode: "voice_call"` for private one-to-one voice rooms. The service caps these rooms at two participants and two microphone seats even if a larger capacity is sent by mistake.
 
 ```bash
-curl -X POST http://localhost:4000/client/rtc/token \
+curl -X POST https://funint.online/client/rtc/token \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -169,7 +171,7 @@ Android:
 val rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config.voiceCall(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "call-user-123-user-456"
     ),
@@ -195,7 +197,7 @@ Use `rtc_mode: "group_voice"` for audio-only rooms with multiple peers. The SDK 
 val rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config.groupVoice(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "group-voice-room-1"
     ),
@@ -244,7 +246,7 @@ Video rooms use the same signaling layer as voice, with one peer connection per 
 val rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config.groupVideo(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "group-video-room-1"
     ),
@@ -412,7 +414,7 @@ Listen with `onMessageReceived`, `onMessageBlocked`, `onCommentReceived`, `onGif
 Create or token a room with `rtc_mode: "youtube"` and include `youtube_control` for hosts/admins:
 
 ```bash
-curl -X POST http://localhost:4000/client/rtc/token \
+curl -X POST https://funint.online/client/rtc/token \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -430,7 +432,7 @@ Android apps render YouTube with their own player view and use the SDK to synchr
 rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config.audioRoom(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "watch-room-1"
     ),
@@ -473,7 +475,7 @@ lateinit var rtc: RtcServiceSdk
 rtc = RtcServiceSdk(
     context = this,
     config = RtcServiceSdk.Config(
-        signalingUrl = "https://your-rtc-domain.example",
+        signalingUrl = "https://funint.online",
         accessToken = tokenFromYourBackend,
         roomId = "support-room-1",
         enableAudio = true,
@@ -509,21 +511,21 @@ Billing is calculated from RTC sessions recorded by `POST /client/rtc/session/st
 Platform admin company summary:
 
 ```bash
-curl http://localhost:4000/admin/billing/companies \
-  -H "Authorization: Bearer rtc-admin-dev-key"
+curl https://funint.online/admin/billing/companies \
+  -H "Authorization: Bearer RTC_ADMIN_KEY"
 ```
 
 Single app billing detail:
 
 ```bash
-curl http://localhost:4000/admin/apps/acme-android-app/billing \
-  -H "Authorization: Bearer rtc-admin-dev-key"
+curl https://funint.online/admin/apps/acme-android-app/billing \
+  -H "Authorization: Bearer RTC_ADMIN_KEY"
 ```
 
 Client app usage:
 
 ```bash
-curl http://localhost:4000/client/billing/usage \
+curl https://funint.online/client/billing/usage \
   -H "Authorization: Bearer CLIENT_API_KEY"
 ```
 

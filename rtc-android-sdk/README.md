@@ -4,6 +4,8 @@ Standalone Android library build for the RTC Platform SDK.
 
 This project builds the SDK from `../android-app/RtcServiceSdk.kt` and does not include the `Test-rtc` app.
 
+For client app setup with the `.aar` file, Gradle dependencies, runtime permissions, and token flow, see `../docs/android-aar-sdk-integration.md`.
+
 ## Build
 
 ```bash
