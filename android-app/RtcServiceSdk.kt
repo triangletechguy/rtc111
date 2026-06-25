@@ -1,5 +1,7 @@
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.media.projection.MediaProjection
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
@@ -18,6 +20,7 @@ import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
+import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SessionDescription
 import org.webrtc.SdpObserver
 import org.webrtc.SurfaceTextureHelper
@@ -99,6 +102,15 @@ class RtcServiceSdk(
                 iceServers = iceServers
             )
 
+            fun oneToOneVideoCall(
+                signalingUrl: String,
+                accessToken: String,
+                roomId: String,
+                iceServers: List<PeerConnection.IceServer> = listOf(
+                    PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+                )
+            ): Config = videoCall(signalingUrl, accessToken, roomId, iceServers)
+
             fun groupVideo(
                 signalingUrl: String,
                 accessToken: String,
@@ -125,7 +137,94 @@ class RtcServiceSdk(
                     PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
                 )
             ): Config = videoCall(signalingUrl, accessToken, roomId, iceServers)
+
+            fun screenShare(
+                signalingUrl: String,
+                accessToken: String,
+                roomId: String,
+                iceServers: List<PeerConnection.IceServer> = listOf(
+                    PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+                )
+            ): Config = videoCall(signalingUrl, accessToken, roomId, iceServers)
         }
+    }
+
+    data class VideoEffects(
+        val filter: String = "none",
+        val aiFilter: String = "none",
+        val sticker: String = "",
+        val faceDetectEnabled: Boolean = false,
+        val beautyEnabled: Boolean = false,
+        val beautyLevel: Int = 0,
+        val smoothingLevel: Int = 0,
+        val whiteningLevel: Int = 0,
+        val eyeLevel: Int = 0,
+        val faceSlimLevel: Int = 0,
+        val makeup: JSONObject = JSONObject()
+    ) {
+        fun toJson(): JSONObject {
+            return JSONObject()
+                .put("filter", filter.ifBlank { "none" })
+                .put("aiFilter", aiFilter.ifBlank { "none" })
+                .put("sticker", sticker)
+                .put("faceDetectEnabled", faceDetectEnabled)
+                .put("beautyEnabled", beautyEnabled)
+                .put("beautyLevel", clamp(beautyLevel))
+                .put("smoothingLevel", clamp(smoothingLevel))
+                .put("whiteningLevel", clamp(whiteningLevel))
+                .put("eyeLevel", clamp(eyeLevel))
+                .put("faceSlimLevel", clamp(faceSlimLevel))
+                .put("makeup", JSONObject(makeup.toString()))
+        }
+
+        companion object {
+            fun natural(
+                beautyLevel: Int = 65,
+                smoothingLevel: Int = 55,
+                whiteningLevel: Int = 35,
+                eyeLevel: Int = 20,
+                faceSlimLevel: Int = 20
+            ): VideoEffects = VideoEffects(
+                filter = "soft",
+                aiFilter = "portrait",
+                faceDetectEnabled = true,
+                beautyEnabled = true,
+                beautyLevel = beautyLevel,
+                smoothingLevel = smoothingLevel,
+                whiteningLevel = whiteningLevel,
+                eyeLevel = eyeLevel,
+                faceSlimLevel = faceSlimLevel
+            )
+
+            fun glam(
+                lipstick: String = "rose",
+                blush: String = "peach",
+                beautyLevel: Int = 75
+            ): VideoEffects = VideoEffects(
+                filter = "glow",
+                aiFilter = "portrait",
+                faceDetectEnabled = true,
+                beautyEnabled = true,
+                beautyLevel = beautyLevel,
+                smoothingLevel = 65,
+                whiteningLevel = 45,
+                eyeLevel = 35,
+                faceSlimLevel = 30,
+                makeup = JSONObject()
+                    .put("lipstick", lipstick)
+                    .put("blush", blush)
+                    .put("contour", "soft")
+            )
+
+            fun sticker(sticker: String, filter: String = "soft"): VideoEffects = natural()
+                .copy(filter = filter, sticker = sticker)
+
+            private fun clamp(level: Int): Int = level.coerceIn(0, 100)
+        }
+    }
+
+    interface VideoEffectProcessor {
+        fun onVideoEffectsChanged(effects: JSONObject)
     }
 
     enum class ConnectionIndicator {
@@ -150,18 +249,40 @@ class RtcServiceSdk(
         fun onRoomFull() {}
         fun onRoomError(message: String) {}
         fun onRoomState(participantCount: Int) {}
+        fun onRoomUpdated(room: JSONObject) {}
+        fun onRoomEntryNotification(event: JSONObject) {}
+        fun onRoomKicked(event: JSONObject) {}
+        fun onRoomKickHistory(event: JSONObject) {}
+        fun onRoomLiked(event: JSONObject) {}
+        fun onRoomShared(event: JSONObject) {}
         fun onWaitingForPeer() {}
         fun onPeerJoined(peerId: String) {}
         fun onPeerLeft(peerId: String) {}
         fun onParticipantJoined(peerId: String) {}
         fun onParticipantLeft(peerId: String, reason: String) {}
         fun onParticipantUpdated(peerId: String, micEnabled: Boolean, cameraEnabled: Boolean) {}
+        fun onParticipantMicMuted(event: JSONObject) {}
+        fun onMessageHistory(event: JSONObject) {}
+        fun onMessageReceived(message: JSONObject) {}
+        fun onMessageUpdated(message: JSONObject) {}
+        fun onMessageBlocked(event: JSONObject) {}
+        fun onMessageError(event: JSONObject) {}
+        fun onCommentReceived(comment: JSONObject) {}
+        fun onCommentCleaned(event: JSONObject) {}
+        fun onGiftHistory(event: JSONObject) {}
+        fun onGiftReceived(gift: JSONObject) {}
+        fun onChatBanStateChanged(event: JSONObject) {}
+        fun onChatBanHistory(event: JSONObject) {}
+        fun onUserBlockUpdated(event: JSONObject) {}
         fun onYoutubeStateChanged(state: JSONObject) {}
         fun onYoutubeError(message: String) {}
         fun onSecurityChecked(result: JSONObject) {}
         fun onSecurityIncident(incident: JSONObject) {}
         fun onScreenShareStateChanged(peerId: String, enabled: Boolean) {}
         fun onVideoEffectsChanged(peerId: String, effects: JSONObject) {}
+        fun onLocalScreenShareStarted() {}
+        fun onLocalScreenShareStopped() {}
+        fun onLocalVideoEffectsChanged(effects: JSONObject) {}
         fun onLivePkStateChanged(state: JSONObject) {}
         fun onLocalStream(stream: MediaStream) {}
         fun onRemoteStream(stream: MediaStream) {}
@@ -204,6 +325,14 @@ class RtcServiceSdk(
     private var autoJoinRoomId: String? = null
     private var pendingLeaveRoomId: String? = null
     private var connectionIndicator = ConnectionIndicator.DISCONNECTED
+    private var videoEffectProcessor: VideoEffectProcessor? = null
+
+    private data class CapturedVideoTrack(
+        val capturer: VideoCapturer,
+        val source: VideoSource,
+        val textureHelper: SurfaceTextureHelper,
+        val track: VideoTrack
+    )
 
     fun attachRenderers(
         localRenderer: SurfaceViewRenderer?,
@@ -262,6 +391,25 @@ class RtcServiceSdk(
         connect()
     }
 
+    fun connectAndJoinVideoCall(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        prepareVideoRoom(initialEffects)
+        connectAndJoin(roomId)
+    }
+
+    fun connectAndJoinOneToOneVideoCall(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        connectAndJoinVideoCall(roomId, initialEffects)
+    }
+
+    fun connectAndJoinSoloVideoLive(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        prepareVideoRoom(initialEffects)
+        connectAndJoin(roomId)
+    }
+
+    fun connectAndJoinLivePkRoom(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        prepareVideoRoom(initialEffects)
+        connectAndJoin(roomId)
+    }
+
     fun joinAudioRoom(roomId: String = config.roomId) {
         cameraEnabled = false
         videoTrack?.setEnabled(false)
@@ -282,25 +430,29 @@ class RtcServiceSdk(
         joinAudioRoom(roomId)
     }
 
-    fun joinVideoRoom(roomId: String = config.roomId) {
-        cameraEnabled = true
+    fun joinVideoRoom(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        prepareVideoRoom(initialEffects)
         joinRoom(roomId)
     }
 
-    fun joinVideoCall(roomId: String = config.roomId) {
-        joinVideoRoom(roomId)
+    fun joinVideoCall(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        joinVideoRoom(roomId, initialEffects)
     }
 
-    fun joinGroupVideoRoom(roomId: String = config.roomId) {
-        joinVideoRoom(roomId)
+    fun joinOneToOneVideoCall(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        joinVideoCall(roomId, initialEffects)
     }
 
-    fun joinSoloVideoLive(roomId: String = config.roomId) {
-        joinVideoRoom(roomId)
+    fun joinGroupVideoRoom(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        joinVideoRoom(roomId, initialEffects)
     }
 
-    fun joinLivePkRoom(roomId: String = config.roomId) {
-        joinVideoRoom(roomId)
+    fun joinSoloVideoLive(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        joinVideoRoom(roomId, initialEffects)
+    }
+
+    fun joinLivePkRoom(roomId: String = config.roomId, initialEffects: JSONObject? = null) {
+        joinVideoRoom(roomId, initialEffects)
     }
 
     fun joinRoom(roomId: String = config.roomId) {
@@ -415,19 +567,183 @@ class RtcServiceSdk(
 
     fun setScreenShareEnabled(enabled: Boolean) {
         screenShareEnabled = enabled
-        socket?.emit(
-            "screen:state",
-            JSONObject()
-                .put("enabled", enabled)
-                .put("screenShareEnabled", enabled)
+        emitScreenShareState(enabled)
+    }
+
+    fun startScreenShare(
+        mediaProjectionPermissionResultData: Intent,
+        mediaProjectionCallback: MediaProjection.Callback,
+        width: Int = config.videoWidth,
+        height: Int = config.videoHeight,
+        fps: Int = config.videoFps
+    ): Boolean {
+        return startScreenShare(
+            ScreenCapturerAndroid(mediaProjectionPermissionResultData, mediaProjectionCallback),
+            width,
+            height,
+            fps
         )
-        emitMediaState()
+    }
+
+    fun startScreenShare(
+        screenCapturer: VideoCapturer,
+        width: Int = config.videoWidth,
+        height: Int = config.videoHeight,
+        fps: Int = config.videoFps
+    ): Boolean {
+        if (!config.enableVideo) {
+            listener.onError("Video is disabled in this SDK config")
+            return false
+        }
+
+        cameraEnabled = true
+        val replaced = replaceLocalVideoTrack(screenCapturer, width, height, fps)
+
+        if (replaced) {
+            screenShareEnabled = true
+            emitScreenShareState(true)
+            listener.onLocalScreenShareStarted()
+        }
+
+        return replaced
+    }
+
+    fun stopScreenShare(
+        width: Int = config.videoWidth,
+        height: Int = config.videoHeight,
+        fps: Int = config.videoFps
+    ): Boolean {
+        if (!screenShareEnabled) {
+            return true
+        }
+
+        val cameraCapturer = createCameraCapturer()
+
+        if (cameraCapturer == null) {
+            listener.onError("No camera capturer is available")
+            return false
+        }
+
+        val replaced = replaceLocalVideoTrack(cameraCapturer, width, height, fps)
+
+        if (replaced) {
+            screenShareEnabled = false
+            emitScreenShareState(false)
+            listener.onLocalScreenShareStopped()
+        }
+
+        return replaced
+    }
+
+    fun setCameraCapturer(
+        capturer: VideoCapturer,
+        width: Int = config.videoWidth,
+        height: Int = config.videoHeight,
+        fps: Int = config.videoFps
+    ): Boolean {
+        if (!config.enableVideo) {
+            listener.onError("Video is disabled in this SDK config")
+            return false
+        }
+
+        cameraEnabled = true
+        val replaced = replaceLocalVideoTrack(capturer, width, height, fps)
+
+        if (replaced && screenShareEnabled) {
+            screenShareEnabled = false
+            emitScreenShareState(false)
+            listener.onLocalScreenShareStopped()
+        }
+
+        return replaced
+    }
+
+    fun setVideoEffectProcessor(processor: VideoEffectProcessor?) {
+        videoEffectProcessor = processor
+        processor?.onVideoEffectsChanged(JSONObject(videoEffects.toString()))
     }
 
     fun setVideoEffects(effects: JSONObject) {
         videoEffects = mergeJsonObjects(videoEffects, effects)
+        videoEffectProcessor?.onVideoEffectsChanged(JSONObject(videoEffects.toString()))
         socket?.emit("video:effects", videoEffects)
         emitMediaState()
+        listener.onLocalVideoEffectsChanged(JSONObject(videoEffects.toString()))
+    }
+
+    fun setVideoEffects(effects: VideoEffects) {
+        setVideoEffects(effects.toJson())
+    }
+
+    fun setVideoFilter(filter: String) {
+        setVideoEffects(JSONObject().put("filter", filter.ifBlank { "none" }))
+    }
+
+    fun setAiFilter(aiFilter: String) {
+        setVideoEffects(JSONObject().put("aiFilter", aiFilter.ifBlank { "none" }))
+    }
+
+    fun setSticker(sticker: String) {
+        setVideoEffects(JSONObject().put("sticker", sticker))
+    }
+
+    fun setFaceDetectEnabled(enabled: Boolean) {
+        setVideoEffects(JSONObject().put("faceDetectEnabled", enabled))
+    }
+
+    fun setBeautyEnabled(enabled: Boolean, beautyLevel: Int = if (enabled) 65 else 0) {
+        setVideoEffects(
+            JSONObject()
+                .put("beautyEnabled", enabled)
+                .put("beautyLevel", clampEffectLevel(beautyLevel))
+        )
+    }
+
+    fun setBeautyLevels(
+        beautyLevel: Int = 65,
+        smoothingLevel: Int = 55,
+        whiteningLevel: Int = 35,
+        eyeLevel: Int = 20,
+        faceSlimLevel: Int = 20
+    ) {
+        setVideoEffects(
+            JSONObject()
+                .put("beautyEnabled", true)
+                .put("faceDetectEnabled", true)
+                .put("beautyLevel", clampEffectLevel(beautyLevel))
+                .put("smoothingLevel", clampEffectLevel(smoothingLevel))
+                .put("whiteningLevel", clampEffectLevel(whiteningLevel))
+                .put("eyeLevel", clampEffectLevel(eyeLevel))
+                .put("faceSlimLevel", clampEffectLevel(faceSlimLevel))
+        )
+    }
+
+    fun setBeautyMakeup(makeup: JSONObject) {
+        setVideoEffects(
+            JSONObject()
+                .put("beautyEnabled", true)
+                .put("faceDetectEnabled", true)
+                .put("makeup", JSONObject(makeup.toString()))
+        )
+    }
+
+    fun applyLiveBeautyPreset(preset: String = "natural") {
+        val effects = when (preset.trim().lowercase()) {
+            "glam", "makeup" -> VideoEffects.glam()
+            "sticker", "cute" -> VideoEffects.sticker("crown")
+            "clear", "off", "none" -> VideoEffects()
+            else -> VideoEffects.natural()
+        }
+
+        setVideoEffects(effects)
+    }
+
+    fun clearVideoEffects() {
+        videoEffects = createDefaultVideoEffects()
+        videoEffectProcessor?.onVideoEffectsChanged(JSONObject(videoEffects.toString()))
+        socket?.emit("video:effects", videoEffects)
+        emitMediaState()
+        listener.onLocalVideoEffectsChanged(JSONObject(videoEffects.toString()))
     }
 
     fun setSpeakerphoneOn(enabled: Boolean) {
@@ -558,6 +874,264 @@ class RtcServiceSdk(
         socket?.emit("security:report", payload)
     }
 
+    fun sendMessage(text: String, replyToMessageId: String? = null, metadata: JSONObject? = null) {
+        val payload = JSONObject()
+            .put("kind", "message")
+            .put("text", text)
+
+        replyToMessageId?.takeIf { it.isNotBlank() }?.let { payload.put("replyToMessageId", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("message:send", payload)
+    }
+
+    fun replyToMessage(messageId: String, text: String, metadata: JSONObject? = null) {
+        sendMessage(text, messageId, metadata)
+    }
+
+    fun sendComment(text: String, replyToMessageId: String? = null, metadata: JSONObject? = null) {
+        val payload = JSONObject().put("text", text)
+
+        replyToMessageId?.takeIf { it.isNotBlank() }?.let { payload.put("replyToMessageId", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("comment:send", payload)
+    }
+
+    fun replyToComment(messageId: String, text: String, metadata: JSONObject? = null) {
+        sendComment(text, messageId, metadata)
+    }
+
+    fun sendVoiceMessage(
+        mediaUrl: String,
+        durationSeconds: Double = 0.0,
+        mimeType: String = "audio/webm",
+        replyToMessageId: String? = null,
+        metadata: JSONObject? = null
+    ) {
+        val payload = JSONObject()
+            .put("kind", "voice")
+            .put("mediaUrl", mediaUrl)
+            .put("durationSeconds", durationSeconds)
+            .put("mimeType", mimeType)
+
+        replyToMessageId?.takeIf { it.isNotBlank() }?.let { payload.put("replyToMessageId", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("message:send", payload)
+    }
+
+    fun sendImageMessage(
+        mediaUrl: String,
+        caption: String = "",
+        mimeType: String? = null,
+        replyToMessageId: String? = null,
+        metadata: JSONObject? = null
+    ) {
+        val payload = JSONObject()
+            .put("kind", "image")
+            .put("mediaUrl", mediaUrl)
+            .put("text", caption)
+
+        mimeType?.takeIf { it.isNotBlank() }?.let { payload.put("mimeType", it) }
+        replyToMessageId?.takeIf { it.isNotBlank() }?.let { payload.put("replyToMessageId", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("message:send", payload)
+    }
+
+    fun requestMessageHistory(limit: Int = 50) {
+        socket?.emit("message:list", JSONObject().put("limit", limit))
+    }
+
+    fun unsendMessage(messageId: String) {
+        socket?.emit("message:unsend", JSONObject().put("messageId", messageId))
+    }
+
+    fun deleteMessage(messageId: String, forMe: Boolean = false) {
+        socket?.emit(
+            "message:delete",
+            JSONObject()
+                .put("messageId", messageId)
+                .put("forMe", forMe)
+        )
+    }
+
+    fun sendGift(
+        giftId: String,
+        name: String,
+        assetUrl: String,
+        assetType: String? = null,
+        quantity: Int = 1,
+        receiverUserId: String? = null,
+        metadata: JSONObject? = null
+    ) {
+        val payload = JSONObject()
+            .put("giftId", giftId)
+            .put("name", name)
+            .put("assetUrl", assetUrl)
+            .put("quantity", quantity)
+
+        assetType?.takeIf { it.isNotBlank() }?.let { payload.put("assetType", it) }
+        receiverUserId?.takeIf { it.isNotBlank() }?.let { payload.put("receiverUserId", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("gift:send", payload)
+    }
+
+    fun updateRoomProfile(name: String? = null, profilePictureUrl: String? = null) {
+        val payload = JSONObject()
+
+        name?.takeIf { it.isNotBlank() }?.let { payload.put("name", it) }
+        profilePictureUrl?.takeIf { it.isNotBlank() }?.let { payload.put("profilePictureUrl", it) }
+        socket?.emit("room:profile:update", payload)
+    }
+
+    fun updateRoomSettings(settings: JSONObject) {
+        socket?.emit("room:settings:update", settings)
+    }
+
+    fun updateRoomMicAmount(maxMicCount: Int) {
+        updateRoomSettings(JSONObject().put("maxMicCount", maxMicCount))
+    }
+
+    fun setPrivateRoomPassword(password: String) {
+        updateRoomSettings(
+            JSONObject()
+                .put("privacyType", "private")
+                .put("password", password)
+        )
+    }
+
+    fun clearPrivateRoomPassword() {
+        updateRoomSettings(
+            JSONObject()
+                .put("privacyType", "public")
+                .put("clearPassword", true)
+        )
+    }
+
+    fun setRoomEntryNotificationEnabled(enabled: Boolean) {
+        updateRoomSettings(JSONObject().put("entryNotificationsEnabled", enabled))
+    }
+
+    fun setRoomTheme(theme: JSONObject) {
+        socket?.emit("room:theme:update", JSONObject().put("theme", theme))
+    }
+
+    fun setRoomAnnouncement(text: String, pinned: Boolean = true) {
+        socket?.emit(
+            "room:announcement:update",
+            JSONObject()
+                .put("text", text)
+                .put("pinned", pinned)
+        )
+    }
+
+    fun updateRoomAdmins(admins: JSONArray = JSONArray(), superAdmins: JSONArray = JSONArray()) {
+        socket?.emit(
+            "room:admins:update",
+            JSONObject()
+                .put("admins", admins)
+                .put("superAdmins", superAdmins)
+        )
+    }
+
+    fun kickUserFromRoom(
+        targetUserId: String? = null,
+        targetSocketId: String? = null,
+        reason: String? = null,
+        permanent: Boolean = false,
+        durationSeconds: Int = 0,
+        metadata: JSONObject? = null
+    ) {
+        val payload = JSONObject()
+            .put("permanent", permanent)
+            .put("durationSeconds", durationSeconds)
+
+        targetUserId?.takeIf { it.isNotBlank() }?.let { payload.put("targetUserId", it) }
+        targetSocketId?.takeIf { it.isNotBlank() }?.let { payload.put("targetSocketId", it) }
+        reason?.takeIf { it.isNotBlank() }?.let { payload.put("reason", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("room:kick", payload)
+    }
+
+    fun requestKickHistory() {
+        socket?.emit("room:kick:history:list", JSONObject())
+    }
+
+    fun editKickHistory(historyId: String, updates: JSONObject) {
+        socket?.emit("room:kick:history:update", JSONObject(updates.toString()).put("id", historyId))
+    }
+
+    fun cleanComments(targetUserId: String? = null) {
+        val payload = JSONObject()
+
+        targetUserId?.takeIf { it.isNotBlank() }?.let { payload.put("targetUserId", it) }
+        socket?.emit("room:comments:clean", payload)
+    }
+
+    fun muteUserMic(targetUserId: String? = null, targetSocketId: String? = null, enabled: Boolean = false) {
+        val payload = JSONObject().put("enabled", enabled)
+
+        targetUserId?.takeIf { it.isNotBlank() }?.let { payload.put("targetUserId", it) }
+        targetSocketId?.takeIf { it.isNotBlank() }?.let { payload.put("targetSocketId", it) }
+        socket?.emit("participant:mic:mute", payload)
+    }
+
+    fun setChatBan(
+        targetUserId: String,
+        enabled: Boolean = true,
+        reason: String? = null,
+        permanent: Boolean = false,
+        durationSeconds: Int = 0,
+        metadata: JSONObject? = null
+    ) {
+        val payload = JSONObject()
+            .put("targetUserId", targetUserId)
+            .put("enabled", enabled)
+            .put("permanent", permanent)
+            .put("durationSeconds", durationSeconds)
+
+        reason?.takeIf { it.isNotBlank() }?.let { payload.put("reason", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("chat:ban", payload)
+    }
+
+    fun requestChatBanHistory() {
+        socket?.emit("chat:ban:history:list", JSONObject())
+    }
+
+    fun editChatBanHistory(historyId: String, updates: JSONObject) {
+        socket?.emit("chat:ban:history:update", JSONObject(updates.toString()).put("id", historyId))
+    }
+
+    fun likeRoom() {
+        socket?.emit("room:like", JSONObject())
+    }
+
+    fun shareRoom(target: String? = null) {
+        val payload = JSONObject()
+
+        target?.takeIf { it.isNotBlank() }?.let { payload.put("target", it) }
+        socket?.emit("room:share", payload)
+    }
+
+    fun blockUser(blockedUserId: String, reason: String? = null, metadata: JSONObject? = null) {
+        val payload = JSONObject().put("blockedUserId", blockedUserId)
+
+        reason?.takeIf { it.isNotBlank() }?.let { payload.put("reason", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("user:block", payload)
+    }
+
+    fun unblockUser(blockedUserId: String, reason: String? = null, metadata: JSONObject? = null) {
+        val payload = JSONObject().put("blockedUserId", blockedUserId)
+
+        reason?.takeIf { it.isNotBlank() }?.let { payload.put("reason", it) }
+        metadata?.let { payload.put("metadata", it) }
+        socket?.emit("user:unblock", payload)
+    }
+
+    fun requestBlockedUsers() {
+        socket?.emit("user:block:list", JSONObject())
+    }
+
     fun disconnect() {
         socket?.disconnect()
         socket?.off()
@@ -684,6 +1258,61 @@ class RtcServiceSdk(
             listener.onRoomState(state.optInt("participantCount"))
         }
 
+        socket.on("room:updated") { args ->
+            val room = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(room)
+        }
+
+        socket.on("room:profile") { args ->
+            val room = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(room)
+        }
+
+        socket.on("room:settings") { args ->
+            val room = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(room)
+        }
+
+        socket.on("room:theme") { args ->
+            val room = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(room)
+        }
+
+        socket.on("room:announcement") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(JSONObject().put("announcement", event))
+        }
+
+        socket.on("room:admins") { args ->
+            val room = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomUpdated(room)
+        }
+
+        socket.on("room:entry") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomEntryNotification(event)
+        }
+
+        socket.on("room:kicked") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomKicked(event)
+        }
+
+        socket.on("room:kick:history") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomKickHistory(event)
+        }
+
+        socket.on("room:like") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomLiked(event)
+        }
+
+        socket.on("room:share") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onRoomShared(event)
+        }
+
         socket.on("participant:updated") { args ->
             val participant = args.firstOrNull() as? JSONObject ?: return@on
             listener.onParticipantUpdated(
@@ -691,6 +1320,86 @@ class RtcServiceSdk(
                 participant.optBoolean("micEnabled"),
                 participant.optBoolean("cameraEnabled")
             )
+        }
+
+        socket.on("participant:mic:muted") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onParticipantMicMuted(event)
+        }
+
+        socket.on("message:history") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageHistory(event)
+        }
+
+        socket.on("message:received") { args ->
+            val message = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageReceived(message)
+        }
+
+        socket.on("message:updated") { args ->
+            val message = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageUpdated(message)
+        }
+
+        socket.on("message:unsent") { args ->
+            val message = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageUpdated(message)
+        }
+
+        socket.on("message:deleted") { args ->
+            val message = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageUpdated(message)
+        }
+
+        socket.on("message:blocked") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageBlocked(event)
+        }
+
+        socket.on("message:error") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onMessageError(event)
+        }
+
+        socket.on("comment:received") { args ->
+            val comment = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onCommentReceived(comment)
+        }
+
+        socket.on("comment:cleaned") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onCommentCleaned(event)
+        }
+
+        socket.on("gift:history") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onGiftHistory(event)
+        }
+
+        socket.on("gift:received") { args ->
+            val gift = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onGiftReceived(gift)
+        }
+
+        socket.on("chat:ban") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onChatBanStateChanged(event)
+        }
+
+        socket.on("chat:ban:history") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onChatBanHistory(event)
+        }
+
+        socket.on("user:block:updated") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onUserBlockUpdated(event)
+        }
+
+        socket.on("user:block:history") { args ->
+            val event = args.firstOrNull() as? JSONObject ?: return@on
+            listener.onUserBlockUpdated(event)
         }
 
         socket.on("existing-users") { args ->
@@ -1118,6 +1827,27 @@ class RtcServiceSdk(
         peerConnections.keys.toList().forEach { createOffer(it) }
     }
 
+    private fun prepareVideoRoom(initialEffects: JSONObject?) {
+        cameraEnabled = true
+
+        initialEffects?.let {
+            videoEffects = mergeJsonObjects(videoEffects, it)
+            val effectsSnapshot = JSONObject(videoEffects.toString())
+            videoEffectProcessor?.onVideoEffectsChanged(effectsSnapshot)
+            listener.onLocalVideoEffectsChanged(JSONObject(effectsSnapshot.toString()))
+        }
+    }
+
+    private fun emitScreenShareState(enabled: Boolean) {
+        socket?.emit(
+            "screen:state",
+            JSONObject()
+                .put("enabled", enabled)
+                .put("screenShareEnabled", enabled)
+        )
+        emitMediaState()
+    }
+
     private fun createAudioConstraints(): MediaConstraints {
         return MediaConstraints().apply {
             optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
@@ -1132,18 +1862,7 @@ class RtcServiceSdk(
     }
 
     private fun createDefaultVideoEffects(): JSONObject {
-        return JSONObject()
-            .put("filter", "none")
-            .put("aiFilter", "none")
-            .put("sticker", "")
-            .put("faceDetectEnabled", false)
-            .put("beautyEnabled", false)
-            .put("beautyLevel", 0)
-            .put("smoothingLevel", 0)
-            .put("whiteningLevel", 0)
-            .put("eyeLevel", 0)
-            .put("faceSlimLevel", 0)
-            .put("makeup", JSONObject())
+        return VideoEffects().toJson()
     }
 
     private fun mergeJsonObjects(base: JSONObject, updates: JSONObject): JSONObject {
@@ -1152,11 +1871,23 @@ class RtcServiceSdk(
 
         while (keys.hasNext()) {
             val key = keys.next()
-            merged.put(key, updates.opt(key))
+            val value = when (key) {
+                "beautyLevel",
+                "smoothingLevel",
+                "whiteningLevel",
+                "eyeLevel",
+                "faceSlimLevel" -> clampEffectLevel(updates.optInt(key, merged.optInt(key)))
+                "makeup" -> (updates.optJSONObject(key) ?: JSONObject())
+                else -> updates.opt(key)
+            }
+
+            merged.put(key, value)
         }
 
         return merged
     }
+
+    private fun clampEffectLevel(level: Int): Int = level.coerceIn(0, 100)
 
     private fun createLocalVideoTrack(factory: PeerConnectionFactory): VideoTrack? {
         videoTrack?.let { return it }
@@ -1168,24 +1899,139 @@ class RtcServiceSdk(
             return null
         }
 
-        val textureHelper = SurfaceTextureHelper.create(
-            "RtcServiceCaptureThread",
-            eglBase.eglBaseContext
-        )
-        val source = factory.createVideoSource(capturer.isScreencast)
+        val capturedTrack = createCapturedVideoTrack(
+            factory = factory,
+            capturer = capturer,
+            width = config.videoWidth,
+            height = config.videoHeight,
+            fps = config.videoFps
+        ) ?: return null
 
-        videoCapturer = capturer
-        surfaceTextureHelper = textureHelper
-        videoSource = source
+        videoCapturer = capturedTrack.capturer
+        surfaceTextureHelper = capturedTrack.textureHelper
+        videoSource = capturedTrack.source
 
-        capturer.initialize(textureHelper, context, source.capturerObserver)
-        capturer.startCapture(config.videoWidth, config.videoHeight, config.videoFps)
-
-        return factory.createVideoTrack("video-${UUID.randomUUID()}", source).also { track ->
+        return capturedTrack.track.also { track ->
             videoTrack = track
             track.setEnabled(cameraEnabled)
             localRenderer?.let { track.addSink(it) }
         }
+    }
+
+    private fun replaceLocalVideoTrack(
+        capturer: VideoCapturer,
+        width: Int,
+        height: Int,
+        fps: Int
+    ): Boolean {
+        val factory = getPeerConnectionFactory()
+        val stream = ensureLocalStream(factory)
+        val capturedTrack = createCapturedVideoTrack(factory, capturer, width, height, fps) ?: return false
+
+        val oldCapturer = videoCapturer
+        val oldSource = videoSource
+        val oldTextureHelper = surfaceTextureHelper
+        val oldTrack = videoTrack
+        val nextTrack = capturedTrack.track
+
+        nextTrack.setEnabled(cameraEnabled)
+        localRenderer?.let { nextTrack.addSink(it) }
+
+        oldTrack?.let { track ->
+            localRenderer?.let { track.removeSink(it) }
+            stream.removeTrack(track)
+        }
+        stream.addTrack(nextTrack)
+
+        videoCapturer = capturedTrack.capturer
+        videoSource = capturedTrack.source
+        surfaceTextureHelper = capturedTrack.textureHelper
+        videoTrack = nextTrack
+
+        var needsRenegotiation = false
+        peerConnections.values.forEach { connection ->
+            val sender = connection.senders.firstOrNull { it.track()?.kind() == "video" }
+
+            if (sender == null) {
+                connection.addTrack(nextTrack, listOf(stream.id))
+                needsRenegotiation = true
+            } else if (!sender.setTrack(nextTrack, false)) {
+                needsRenegotiation = true
+            }
+        }
+
+        disposeCapturedVideo(oldCapturer, oldSource, oldTextureHelper, oldTrack)
+
+        if (needsRenegotiation) {
+            peerConnections.keys.toList().forEach { createOffer(it) }
+        }
+
+        listener.onLocalStream(stream)
+        listener.onLocalVideoEnabled(cameraEnabled)
+        return true
+    }
+
+    private fun ensureLocalStream(factory: PeerConnectionFactory): MediaStream {
+        localStream?.let { return it }
+
+        val stream = factory.createLocalMediaStream("local-${UUID.randomUUID()}")
+
+        if (config.enableAudio && audioTrack == null) {
+            stream.addTrack(createLocalAudioTrack(factory))
+        }
+
+        localStream = stream
+        listener.onLocalStream(stream)
+        return stream
+    }
+
+    private fun createCapturedVideoTrack(
+        factory: PeerConnectionFactory,
+        capturer: VideoCapturer,
+        width: Int,
+        height: Int,
+        fps: Int
+    ): CapturedVideoTrack? {
+        val textureHelper = SurfaceTextureHelper.create(
+            if (capturer.isScreencast) "RtcServiceScreenCaptureThread" else "RtcServiceCameraCaptureThread",
+            eglBase.eglBaseContext
+        )
+        val source = factory.createVideoSource(capturer.isScreencast)
+
+        try {
+            capturer.initialize(textureHelper, context, source.capturerObserver)
+            capturer.startCapture(width, height, fps)
+        } catch (error: Exception) {
+            listener.onError(error.message ?: "Unable to start video capture")
+            disposeCapturedVideo(capturer, source, textureHelper, null)
+            return null
+        }
+
+        val track = factory.createVideoTrack("video-${UUID.randomUUID()}", source)
+        return CapturedVideoTrack(capturer, source, textureHelper, track)
+    }
+
+    private fun disposeCapturedVideo(
+        capturer: VideoCapturer?,
+        source: VideoSource?,
+        textureHelper: SurfaceTextureHelper?,
+        track: VideoTrack?
+    ) {
+        try {
+            capturer?.stopCapture()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (_: Exception) {
+        }
+
+        try {
+            capturer?.dispose()
+        } catch (_: Exception) {
+        }
+
+        track?.dispose()
+        source?.dispose()
+        textureHelper?.dispose()
     }
 
     private fun updateConnectionIndicator(indicator: ConnectionIndicator) {

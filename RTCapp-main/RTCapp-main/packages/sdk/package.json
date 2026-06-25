@@ -8,6 +8,8 @@
     "test": "jest"
   },
   "peerDependencies": {
+    "@livekit/react-native": ">=2.11.0",
+    "livekit-client": ">=2.19.0",
     "react-native": ">=0.71.0"
   },
   "dependencies": {

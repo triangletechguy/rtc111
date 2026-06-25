@@ -1,18 +1,115 @@
 .app-shell {
   min-height: 100svh;
   padding: 32px;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(42, 157, 143, 0.13), transparent 30rem),
-    linear-gradient(135deg, #f8fafc 0%, #eef2f7 54%, #f9f3ec 100%);
+  background: linear-gradient(135deg, #f7f9fc 0%, #edf2f6 52%, #f7f5f1 100%);
   color: #172026;
 }
 
 .admin-dashboard {
-  width: min(760px, 100%);
+  width: min(1100px, 100%);
+  margin: 0 auto;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+}
+
+.dashboard-header,
+.token-panel,
+.usage-summary,
+.token-output,
+.billing-panel {
+  border: 1px solid #d9e0e8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 40px rgba(21, 34, 50, 0.08);
+}
+
+.dashboard-header {
+  min-height: 104px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dashboard-header h1,
+.panel-header h2 {
+  margin: 0;
+  color: #172026;
+  letter-spacing: 0;
+}
+
+.dashboard-header h1 {
+  font-size: 2.3rem;
+  line-height: 1.05;
+}
+
+.dashboard-header p,
+.panel-header p {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: #52606c;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.connection-indicator {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #c8d1dc;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #314150;
+  font-size: 0.88rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.connection-indicator span {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #8b98a7;
+}
+
+.connection-indicator.online {
+  border-color: rgba(42, 157, 143, 0.42);
+  background: #effaf7;
+  color: #0f766e;
+}
+
+.connection-indicator.online span {
+  background: #2a9d8f;
+}
+
+.connection-indicator.connecting {
+  border-color: rgba(231, 111, 81, 0.36);
+  background: #fff7ed;
+  color: #a14921;
+}
+
+.connection-indicator.connecting span {
+  background: #e76f51;
+}
+
+.connection-indicator.offline {
+  border-color: rgba(190, 18, 60, 0.3);
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.connection-indicator.offline span {
+  background: #be123c;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 14px;
 }
 
 .token-panel,
@@ -23,12 +120,10 @@
 }
 
 .token-panel,
-.token-output {
+.token-output,
+.billing-panel,
+.usage-summary {
   padding: 16px;
-  border: 1px solid #d9e0e8;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 16px 40px rgba(21, 34, 50, 0.08);
 }
 
 .token-panel {
@@ -71,6 +166,7 @@ button {
   background: #e76f51;
   color: #fff;
   font: inherit;
+  font-size: 0.94rem;
   font-weight: 800;
   cursor: pointer;
 }
@@ -84,6 +180,44 @@ button {
 button:disabled {
   cursor: not-allowed;
   background: #a9b2bd;
+}
+
+.secondary-button {
+  min-width: 104px;
+  padding: 0 16px;
+  background: #264653;
+}
+
+.secondary-button:disabled {
+  background: #a9b2bd;
+}
+
+.usage-summary dl {
+  height: 100%;
+  min-height: 78px;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 12px;
+}
+
+.usage-summary div {
+  min-width: 0;
+}
+
+.usage-summary dt {
+  color: #52606c;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.usage-summary dd {
+  margin: 5px 0 0;
+  color: #172026;
+  font-size: 1.24rem;
+  font-weight: 900;
+  overflow-wrap: anywhere;
 }
 
 .token-output {
@@ -114,7 +248,8 @@ button:disabled {
   background: #a9b2bd;
 }
 
-.token-status {
+.token-status,
+.billing-status {
   min-height: 18px;
   margin: 10px 0 0;
   color: #52606c;
@@ -122,24 +257,127 @@ button:disabled {
   font-weight: 700;
 }
 
-@media (max-width: 760px) {
-  .app-shell {
-    padding: 18px;
-    place-items: start stretch;
-  }
+.billing-panel {
+  display: grid;
+  gap: 14px;
+}
 
-  .token-panel,
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-header h2 {
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.billing-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 12px 10px;
+  border-bottom: 1px solid #e5ebf2;
+  text-align: right;
+  white-space: nowrap;
+}
+
+th {
+  color: #52606c;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+td {
+  color: #314150;
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+
+td strong,
+td span {
+  display: block;
+}
+
+td strong {
+  color: #172026;
+  font-weight: 900;
+}
+
+td span {
+  margin-top: 3px;
+  color: #6b7886;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+}
+
+.empty-cell {
+  height: 72px;
+  color: #6b7886;
+  text-align: center;
+}
+
+@media (max-width: 920px) {
+  .dashboard-header,
+  .panel-header,
   .token-copy-row {
     align-items: stretch;
     flex-direction: column;
   }
 
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .connection-indicator {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: 18px;
+  }
+
+  .dashboard-header {
+    min-height: auto;
+    padding: 16px;
+  }
+
+  .dashboard-header h1 {
+    font-size: 1.75rem;
+  }
+
   .token-panel {
     display: flex;
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .token-panel button,
-  .token-copy-row button {
+  .token-copy-row button,
+  .secondary-button {
     width: 100%;
+  }
+
+  .usage-summary dl {
+    grid-template-columns: 1fr;
   }
 }

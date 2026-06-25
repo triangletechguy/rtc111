@@ -6,7 +6,22 @@ export const RTC_DEFAULT_SIGNALING_URL =
 export const RTC_DEFAULT_API_KEY =
   import.meta.env.VITE_RTC_API_KEY ?? "rtc-dev-api-key";
 
+export const RTC_DEFAULT_ADMIN_KEY =
+  import.meta.env.VITE_RTC_ADMIN_KEY ?? "rtc-admin-dev-key";
+
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+export const RTC_CONNECTION_INDICATORS = Object.freeze({
+  DISCONNECTED: "disconnected",
+  CONNECTING: "connecting",
+  CONNECTED: "connected",
+  JOINING_ROOM: "joining_room",
+  IN_ROOM: "in_room",
+  WAITING_FOR_PEER: "waiting_for_peer",
+  PEER_CONNECTING: "peer_connecting",
+  PEER_CONNECTED: "peer_connected",
+  RECONNECTING: "reconnecting",
+  FAILED: "failed",
+});
 export const RTC_AUDIO_ROOM_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
 export const RTC_ONE_TO_ONE_VOICE_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
 export const RTC_GROUP_VOICE_PERMISSIONS = ["join", "publish_audio", "chat", "signal"];
@@ -61,6 +76,38 @@ export async function verifyClient({
   apiKey = RTC_DEFAULT_API_KEY,
 } = {}) {
   return requestJson(`${apiUrl}/client/me`, {
+    headers: getClientHeaders(apiKey),
+  });
+}
+
+export async function getAdminBilling({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+} = {}) {
+  return requestJson(`${apiUrl}/admin/billing/companies`, {
+    headers: getAdminHeaders(adminKey),
+  });
+}
+
+export async function getAdminAppBilling({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+  appId,
+} = {}) {
+  if (!appId) {
+    throw new Error("appId is required");
+  }
+
+  return requestJson(`${apiUrl}/admin/apps/${encodeURIComponent(appId)}/billing`, {
+    headers: getAdminHeaders(adminKey),
+  });
+}
+
+export async function getClientBillingUsage({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  apiKey = RTC_DEFAULT_API_KEY,
+} = {}) {
+  return requestJson(`${apiUrl}/client/billing/usage`, {
     headers: getClientHeaders(apiKey),
   });
 }
@@ -168,6 +215,10 @@ export async function createVideoCallRoom(options = {}) {
   });
 }
 
+export async function createOneToOneVideoCallRoom(options = {}) {
+  return createVideoCallRoom(options);
+}
+
 export async function createGroupVideoRoom(options = {}) {
   return createRoom({
     roomType: "group_video",
@@ -257,6 +308,10 @@ export async function issueVideoCallToken(options = {}) {
     permissions: RTC_VIDEO_ROOM_PERMISSIONS,
     ...options,
   });
+}
+
+export async function issueOneToOneVideoCallToken(options = {}) {
+  return issueVideoCallToken(options);
 }
 
 export async function issueGroupVideoToken(options = {}) {
@@ -349,6 +404,10 @@ export async function startVideoCallSession(options = {}) {
     permissions: RTC_VIDEO_ROOM_PERMISSIONS,
     ...options,
   });
+}
+
+export async function startOneToOneVideoCallSession(options = {}) {
+  return startVideoCallSession(options);
 }
 
 export async function startGroupVideoSession(options = {}) {
@@ -445,6 +504,12 @@ export class RtcServiceClient extends EventTarget {
     this.videoEffects = createDefaultVideoEffects();
     this.youtubeState = null;
     this.livePkState = null;
+    this.connectionIndicator = RTC_CONNECTION_INDICATORS.DISCONNECTED;
+    this.connectionIndicatorDetail = {
+      indicator: RTC_CONNECTION_INDICATORS.DISCONNECTED,
+      state: RTC_CONNECTION_INDICATORS.DISCONNECTED,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   on(eventName, handler) {
@@ -471,8 +536,11 @@ export class RtcServiceClient extends EventTarget {
 
   async connect() {
     if (this.socket?.connected) {
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTED);
       return this.socket;
     }
+
+    this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTING);
 
     this.socket = io(this.signalingUrl, {
       auth: { token: this.token },
@@ -484,11 +552,15 @@ export class RtcServiceClient extends EventTarget {
     return new Promise((resolve, reject) => {
       const handleConnect = () => {
         cleanup();
+        this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTED);
         resolve(this.socket);
       };
 
       const handleConnectError = (error) => {
         cleanup();
+        this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.FAILED, {
+          message: error.message,
+        });
         reject(error);
       };
 
@@ -519,7 +591,7 @@ export class RtcServiceClient extends EventTarget {
     this.isScreenSharing = mediaState.screenShareEnabled ?? this.isScreenSharing;
     this.videoEffects = {
       ...this.videoEffects,
-      ...(mediaState.videoEffects ?? {}),
+      ...normalizeVideoEffects(mediaState.videoEffects ?? {}),
     };
     this.mediaConstraints = withNoiseCancellation(
       this.mediaConstraints,
@@ -554,6 +626,10 @@ export class RtcServiceClient extends EventTarget {
       this.socket.once("room:joined", handleJoined);
       this.socket.once("room:error", handleRoomError);
       this.socket.once("room:full", handleRoomFull);
+    });
+
+    this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.JOINING_ROOM, {
+      roomId: trimmedRoomId,
     });
 
     this.socket.emit("room:join", {
@@ -631,6 +707,10 @@ export class RtcServiceClient extends EventTarget {
     return this.joinVideoRoom(roomId, mediaState);
   }
 
+  async joinOneToOneVideoCall(roomId, mediaState = {}) {
+    return this.joinVideoCall(roomId, mediaState);
+  }
+
   async joinGroupVideoRoom(roomId, mediaState = {}) {
     return this.joinVideoRoom(roomId, mediaState);
   }
@@ -647,6 +727,11 @@ export class RtcServiceClient extends EventTarget {
     this.socket?.emit("room:leave");
     this.currentRoomId = null;
     this.closePeerConnection();
+    this.updateConnectionIndicator(
+      this.socket?.connected
+        ? RTC_CONNECTION_INDICATORS.CONNECTED
+        : RTC_CONNECTION_INDICATORS.DISCONNECTED,
+    );
 
     if (stopMedia) {
       this.stopLocalStream();
@@ -820,6 +905,7 @@ export class RtcServiceClient extends EventTarget {
     this.socket = null;
     this.currentRoomId = null;
     this.closePeerConnections();
+    this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.DISCONNECTED);
   }
 
   destroy() {
@@ -829,30 +915,92 @@ export class RtcServiceClient extends EventTarget {
 
   bindSocketEvents() {
     this.socket.on("connect", () => {
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTED);
       this.emitSdkEvent("connected", { socketId: this.socket.id });
     });
 
     this.socket.on("disconnect", (reason) => {
+      this.updateConnectionIndicator(
+        reason === "transport close"
+          ? RTC_CONNECTION_INDICATORS.RECONNECTING
+          : RTC_CONNECTION_INDICATORS.DISCONNECTED,
+        { reason },
+      );
       this.emitSdkEvent("disconnected", { reason });
     });
 
     this.socket.on("connect_error", (error) => {
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.FAILED, {
+        message: error.message,
+      });
       this.emitSdkEvent("error", { message: error.message });
     });
 
     this.socket.on("room:joined", (event) => {
       this.currentRoomId = event?.room?.id ?? this.currentRoomId;
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.IN_ROOM, {
+        roomId: this.currentRoomId,
+      });
       this.emitSdkEvent("room-joined", event);
     });
 
     this.socket.on("room:left", (event) => {
       this.currentRoomId = null;
       this.closePeerConnections();
+      this.updateConnectionIndicator(
+        this.socket?.connected
+          ? RTC_CONNECTION_INDICATORS.CONNECTED
+          : RTC_CONNECTION_INDICATORS.DISCONNECTED,
+      );
       this.emitSdkEvent("room-left", event);
     });
 
     this.socket.on("room:state", (event) => {
       this.emitSdkEvent("room-state", event);
+    });
+
+    this.socket.on("room:updated", (event) => {
+      this.emitSdkEvent("room-updated", event);
+    });
+
+    this.socket.on("room:profile", (event) => {
+      this.emitSdkEvent("room-profile", event);
+    });
+
+    this.socket.on("room:settings", (event) => {
+      this.emitSdkEvent("room-settings", event);
+    });
+
+    this.socket.on("room:theme", (event) => {
+      this.emitSdkEvent("room-theme", event);
+    });
+
+    this.socket.on("room:announcement", (event) => {
+      this.emitSdkEvent("room-announcement", event);
+    });
+
+    this.socket.on("room:admins", (event) => {
+      this.emitSdkEvent("room-admins", event);
+    });
+
+    this.socket.on("room:entry", (event) => {
+      this.emitSdkEvent("room-entry", event);
+    });
+
+    this.socket.on("room:kicked", (event) => {
+      this.emitSdkEvent("room-kicked", event);
+    });
+
+    this.socket.on("room:kick:history", (event) => {
+      this.emitSdkEvent("room-kick-history", event);
+    });
+
+    this.socket.on("room:like", (event) => {
+      this.emitSdkEvent("room-like", event);
+    });
+
+    this.socket.on("room:share", (event) => {
+      this.emitSdkEvent("room-share", event);
     });
 
     this.socket.on("participant:joined", (event) => {
@@ -865,6 +1013,66 @@ export class RtcServiceClient extends EventTarget {
 
     this.socket.on("participant:left", (event) => {
       this.emitSdkEvent("participant-left", event);
+    });
+
+    this.socket.on("participant:mic:muted", (event) => {
+      this.emitSdkEvent("participant-mic-muted", event);
+    });
+
+    this.socket.on("message:history", (event) => {
+      this.emitSdkEvent("message-history", event);
+    });
+
+    this.socket.on("message:received", (event) => {
+      this.emitSdkEvent("message-received", event);
+    });
+
+    this.socket.on("message:blocked", (event) => {
+      this.emitSdkEvent("message-blocked", event);
+    });
+
+    this.socket.on("message:error", (event) => {
+      this.emitSdkEvent("message-error", event);
+    });
+
+    this.socket.on("message:updated", (event) => {
+      this.emitSdkEvent("message-updated", event);
+    });
+
+    this.socket.on("message:unsent", (event) => {
+      this.emitSdkEvent("message-unsent", event);
+    });
+
+    this.socket.on("message:deleted", (event) => {
+      this.emitSdkEvent("message-deleted", event);
+    });
+
+    this.socket.on("comment:received", (event) => {
+      this.emitSdkEvent("comment-received", event);
+    });
+
+    this.socket.on("comment:cleaned", (event) => {
+      this.emitSdkEvent("comment-cleaned", event);
+    });
+
+    this.socket.on("gift:history", (event) => {
+      this.emitSdkEvent("gift-history", event);
+    });
+
+    this.socket.on("gift:received", (event) => {
+      this.emitSdkEvent("gift-received", event);
+    });
+
+    this.socket.on("chat:ban", (event) => {
+      this.emitSdkEvent("chat-ban", event);
+    });
+
+    this.socket.on("chat:ban:history", (event) => {
+      this.emitSdkEvent("chat-ban-history", event);
+    });
+
+    this.socket.on("user:block:updated", (event) => {
+      this.emitSdkEvent("user-block-updated", event);
     });
 
     this.socket.on("youtube:state", (event) => {
@@ -904,12 +1112,18 @@ export class RtcServiceClient extends EventTarget {
     });
 
     this.socket.on("room:error", (event) => {
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.FAILED, {
+        message: event?.message ?? "Unable to join room",
+      });
       this.emitSdkEvent("room-error", {
         message: event?.message ?? "Unable to join room",
       });
     });
 
     this.socket.on("room:full", (event) => {
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.FAILED, {
+        message: event?.message ?? "Room is full",
+      });
       this.emitSdkEvent("room-full", {
         message: event?.message ?? "Room is full",
         ...event,
@@ -926,20 +1140,37 @@ export class RtcServiceClient extends EventTarget {
       const peerIds = Array.isArray(users) ? users : [];
 
       if (peerIds.length === 0) {
+        this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.WAITING_FOR_PEER, {
+          roomId: this.currentRoomId,
+        });
         this.emitSdkEvent("waiting-for-peer");
         return;
       }
 
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.PEER_CONNECTING, {
+        roomId: this.currentRoomId,
+        peerCount: peerIds.length,
+      });
       await Promise.all(peerIds.map((peerId) => this.createOffer(peerId)));
     });
 
     this.socket.on("user-joined", (peerId) => {
       this.remotePeerId = peerId;
+      this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.PEER_CONNECTING, {
+        roomId: this.currentRoomId,
+        peerId,
+      });
       this.emitSdkEvent("peer-joined", { peerId });
     });
 
     this.socket.on("user-left", (peerId) => {
       this.closePeerConnection(peerId);
+      this.updateConnectionIndicator(
+        this.peerConnections.size > 0
+          ? RTC_CONNECTION_INDICATORS.PEER_CONNECTED
+          : RTC_CONNECTION_INDICATORS.WAITING_FOR_PEER,
+        { roomId: this.currentRoomId, peerId },
+      );
       this.emitSdkEvent("peer-left", { peerId });
     });
 
@@ -1004,6 +1235,10 @@ export class RtcServiceClient extends EventTarget {
     };
 
     peerConnection.onconnectionstatechange = () => {
+      this.updateConnectionIndicator(getIndicatorForPeerState(peerConnection.connectionState), {
+        peerId,
+        peerState: peerConnection.connectionState,
+      });
       this.emitSdkEvent("connection-state", {
         peerId,
         state: peerConnection.connectionState,
@@ -1167,11 +1402,316 @@ export class RtcServiceClient extends EventTarget {
   setVideoEffects(effects = {}) {
     this.videoEffects = {
       ...this.videoEffects,
-      ...effects,
+      ...normalizeVideoEffects(effects),
     };
     this.socket?.emit("video:effects", this.videoEffects);
     this.emitMediaState();
     this.emitSdkEvent("local-video-effects", this.videoEffects);
+  }
+
+  setVideoFilter(filter = "none") {
+    this.setVideoEffects({ filter });
+  }
+
+  setAiFilter(aiFilter = "none") {
+    this.setVideoEffects({ aiFilter });
+  }
+
+  setSticker(sticker = "") {
+    this.setVideoEffects({ sticker });
+  }
+
+  setFaceDetectEnabled(enabled) {
+    this.setVideoEffects({ faceDetectEnabled: Boolean(enabled) });
+  }
+
+  setBeautyEnabled(enabled, beautyLevel = enabled ? 65 : 0) {
+    this.setVideoEffects({
+      beautyEnabled: Boolean(enabled),
+      beautyLevel,
+    });
+  }
+
+  setBeautyLevels({
+    beautyLevel = 65,
+    smoothingLevel = 55,
+    whiteningLevel = 35,
+    eyeLevel = 20,
+    faceSlimLevel = 20,
+  } = {}) {
+    this.setVideoEffects({
+      beautyEnabled: true,
+      faceDetectEnabled: true,
+      beautyLevel,
+      smoothingLevel,
+      whiteningLevel,
+      eyeLevel,
+      faceSlimLevel,
+    });
+  }
+
+  setBeautyMakeup(makeup = {}) {
+    this.setVideoEffects({
+      beautyEnabled: true,
+      faceDetectEnabled: true,
+      makeup,
+    });
+  }
+
+  applyLiveBeautyPreset(preset = "natural") {
+    const normalized = String(preset).trim().toLowerCase();
+
+    if (normalized === "off" || normalized === "none" || normalized === "clear") {
+      this.clearVideoEffects();
+      return;
+    }
+
+    if (normalized === "glam" || normalized === "makeup") {
+      this.setVideoEffects(createGlamBeautyEffects());
+      return;
+    }
+
+    if (normalized === "sticker" || normalized === "cute") {
+      this.setVideoEffects({
+        ...createNaturalBeautyEffects(),
+        sticker: "crown",
+      });
+      return;
+    }
+
+    this.setVideoEffects(createNaturalBeautyEffects());
+  }
+
+  clearVideoEffects() {
+    this.videoEffects = createDefaultVideoEffects();
+    this.socket?.emit("video:effects", this.videoEffects);
+    this.emitMediaState();
+    this.emitSdkEvent("local-video-effects", this.videoEffects);
+  }
+
+  sendMessage({ text, message, content, replyToMessageId, metadata = {} } = {}) {
+    return this.emitWithAck("message:send", {
+      kind: "message",
+      text: text ?? message ?? content ?? "",
+      replyToMessageId,
+      metadata,
+    });
+  }
+
+  replyToMessage(messageId, { text, message, content, metadata = {} } = {}) {
+    return this.sendMessage({
+      text: text ?? message ?? content ?? "",
+      replyToMessageId: messageId,
+      metadata,
+    });
+  }
+
+  sendComment({ text, comment, replyToMessageId, metadata = {} } = {}) {
+    return this.emitWithAck("comment:send", {
+      text: text ?? comment ?? "",
+      replyToMessageId,
+      metadata,
+    });
+  }
+
+  replyToComment(messageId, { text, comment, metadata = {} } = {}) {
+    return this.sendComment({
+      text: text ?? comment ?? "",
+      replyToMessageId: messageId,
+      metadata,
+    });
+  }
+
+  sendVoiceMessage({
+    mediaUrl,
+    url,
+    durationSeconds = 0,
+    mimeType = "audio/webm",
+    replyToMessageId,
+    metadata = {},
+  } = {}) {
+    return this.emitWithAck("message:send", {
+      kind: "voice",
+      mediaUrl: mediaUrl ?? url,
+      durationSeconds,
+      mimeType,
+      replyToMessageId,
+      metadata,
+    });
+  }
+
+  sendImageMessage({
+    mediaUrl,
+    url,
+    caption = "",
+    mimeType,
+    replyToMessageId,
+    metadata = {},
+  } = {}) {
+    return this.emitWithAck("message:send", {
+      kind: "image",
+      text: caption,
+      mediaUrl: mediaUrl ?? url,
+      mimeType,
+      replyToMessageId,
+      metadata,
+    });
+  }
+
+  listMessages({ limit = 50 } = {}) {
+    return this.emitWithAck("message:list", { limit });
+  }
+
+  unsendMessage(messageId) {
+    this.socket?.emit("message:unsend", { messageId });
+  }
+
+  deleteMessage(messageId, { forMe = false } = {}) {
+    this.socket?.emit("message:delete", { messageId, forMe });
+  }
+
+  sendGift({
+    giftId,
+    name,
+    assetUrl,
+    assetType,
+    quantity = 1,
+    receiverUserId,
+    metadata = {},
+  } = {}) {
+    return this.emitWithAck("gift:send", {
+      giftId,
+      name,
+      assetUrl,
+      assetType,
+      quantity,
+      receiverUserId,
+      metadata,
+    });
+  }
+
+  updateRoomProfile({ name, profilePictureUrl } = {}) {
+    this.socket?.emit("room:profile:update", { name, profilePictureUrl });
+  }
+
+  updateRoomSettings(settings = {}) {
+    this.socket?.emit("room:settings:update", settings);
+  }
+
+  updateRoomMicAmount(maxMicCount) {
+    this.updateRoomSettings({ maxMicCount });
+  }
+
+  setPrivateRoomPassword(password) {
+    this.updateRoomSettings({ privacyType: "private", password });
+  }
+
+  clearPrivateRoomPassword() {
+    this.updateRoomSettings({ privacyType: "public", clearPassword: true });
+  }
+
+  setRoomTheme(theme = {}) {
+    this.socket?.emit("room:theme:update", { theme });
+  }
+
+  setRoomAnnouncement(text, { pinned = true } = {}) {
+    this.socket?.emit("room:announcement:update", { text, pinned });
+  }
+
+  updateRoomAdmins({ admins = [], superAdmins = [] } = {}) {
+    this.socket?.emit("room:admins:update", { admins, superAdmins });
+  }
+
+  kickUserFromRoom({
+    targetUserId,
+    targetSocketId,
+    reason,
+    permanent = false,
+    durationSeconds = 0,
+    metadata = {},
+  } = {}) {
+    this.socket?.emit("room:kick", {
+      targetUserId,
+      targetSocketId,
+      reason,
+      permanent,
+      durationSeconds,
+      metadata,
+    });
+  }
+
+  listKickHistory() {
+    return this.emitWithAck("room:kick:history:list", {});
+  }
+
+  editKickHistory(id, updates = {}) {
+    this.socket?.emit("room:kick:history:update", { id, ...updates });
+  }
+
+  cleanComments({ targetUserId } = {}) {
+    this.socket?.emit("room:comments:clean", { targetUserId });
+  }
+
+  muteUserMic({ targetUserId, targetSocketId, enabled = false } = {}) {
+    this.socket?.emit("participant:mic:mute", { targetUserId, targetSocketId, enabled });
+  }
+
+  setChatBan({
+    targetUserId,
+    enabled = true,
+    reason,
+    permanent = false,
+    durationSeconds = 0,
+    metadata = {},
+  } = {}) {
+    this.socket?.emit("chat:ban", {
+      targetUserId,
+      enabled,
+      reason,
+      permanent,
+      durationSeconds,
+      metadata,
+    });
+  }
+
+  listChatBanHistory() {
+    return this.emitWithAck("chat:ban:history:list", {});
+  }
+
+  editChatBanHistory(id, updates = {}) {
+    this.socket?.emit("chat:ban:history:update", { id, ...updates });
+  }
+
+  setRoomEntryNotificationEnabled(enabled) {
+    this.updateRoomSettings({ entryNotificationsEnabled: enabled });
+  }
+
+  likeRoom() {
+    this.socket?.emit("room:like", {});
+  }
+
+  shareRoom({ target } = {}) {
+    this.socket?.emit("room:share", { target });
+  }
+
+  blockUser({ blockedUserId, targetUserId, reason, metadata = {} } = {}) {
+    this.socket?.emit("user:block", {
+      blockedUserId: blockedUserId ?? targetUserId,
+      reason,
+      metadata,
+    });
+  }
+
+  unblockUser({ blockedUserId, targetUserId, reason, metadata = {} } = {}) {
+    this.socket?.emit("user:unblock", {
+      blockedUserId: blockedUserId ?? targetUserId,
+      reason,
+      metadata,
+    });
+  }
+
+  listBlockedUsers() {
+    return this.emitWithAck("user:block:list", {});
   }
 
   checkSecurity({ text, message, content, category = "text" } = {}) {
@@ -1263,6 +1803,31 @@ export class RtcServiceClient extends EventTarget {
     });
   }
 
+  getConnectionIndicator() {
+    return this.connectionIndicatorDetail;
+  }
+
+  updateConnectionIndicator(indicator, detail = {}) {
+    if (!indicator) {
+      return;
+    }
+
+    const payload = {
+      ...detail,
+      indicator,
+      state: indicator,
+      status: indicator,
+      roomId: detail.roomId ?? this.currentRoomId,
+      socketId: this.socket?.id ?? null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.connectionIndicator = indicator;
+    this.connectionIndicatorDetail = payload;
+    this.emitSdkEvent("rtc-connection-indicator", payload);
+    this.emitSdkEvent("connection-indicator", payload);
+  }
+
   emitMediaState() {
     const state = {
       micEnabled: this.isMicEnabled,
@@ -1325,11 +1890,35 @@ export class RtcServiceClient extends EventTarget {
   emitSdkEvent(eventName, detail = {}) {
     this.dispatchEvent(new CustomEvent(eventName, { detail }));
   }
+
+  emitWithAck(eventName, payload = {}, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        reject(new Error("RTC socket is not connected"));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error(`${eventName} timed out`));
+      }, timeoutMs);
+
+      this.socket.emit(eventName, payload, (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+    });
+  }
 }
 
 function getClientHeaders(apiKey) {
   return {
     Authorization: `Bearer ${apiKey}`,
+  };
+}
+
+function getAdminHeaders(adminKey) {
+  return {
+    Authorization: `Bearer ${adminKey}`,
   };
 }
 
@@ -1374,6 +1963,26 @@ function normalizeSignal(signal) {
   }
 
   return null;
+}
+
+function getIndicatorForPeerState(peerState) {
+  if (peerState === "connected") {
+    return RTC_CONNECTION_INDICATORS.PEER_CONNECTED;
+  }
+
+  if (peerState === "connecting" || peerState === "new") {
+    return RTC_CONNECTION_INDICATORS.PEER_CONNECTING;
+  }
+
+  if (peerState === "failed") {
+    return RTC_CONNECTION_INDICATORS.FAILED;
+  }
+
+  if (peerState === "disconnected") {
+    return RTC_CONNECTION_INDICATORS.RECONNECTING;
+  }
+
+  return RTC_CONNECTION_INDICATORS.IN_ROOM;
 }
 
 function getDefaultPermissionsForMode(rtcMode, cameraEnabled = !isAudioOnlyMode(rtcMode)) {
@@ -1427,7 +2036,7 @@ function isScreenShareMode(rtcMode) {
   return normalized === "screen_share" || normalized === "screen";
 }
 
-function createDefaultVideoEffects() {
+export function createDefaultVideoEffects() {
   return {
     filter: "none",
     aiFilter: "none",
@@ -1441,6 +2050,103 @@ function createDefaultVideoEffects() {
     faceSlimLevel: 0,
     makeup: {},
   };
+}
+
+export function createNaturalBeautyEffects() {
+  return {
+    filter: "soft",
+    aiFilter: "portrait",
+    sticker: "",
+    faceDetectEnabled: true,
+    beautyEnabled: true,
+    beautyLevel: 65,
+    smoothingLevel: 55,
+    whiteningLevel: 35,
+    eyeLevel: 20,
+    faceSlimLevel: 20,
+    makeup: {},
+  };
+}
+
+export function createGlamBeautyEffects() {
+  return {
+    filter: "glow",
+    aiFilter: "portrait",
+    sticker: "",
+    faceDetectEnabled: true,
+    beautyEnabled: true,
+    beautyLevel: 75,
+    smoothingLevel: 65,
+    whiteningLevel: 45,
+    eyeLevel: 35,
+    faceSlimLevel: 30,
+    makeup: {
+      lipstick: "rose",
+      blush: "peach",
+      contour: "soft",
+    },
+  };
+}
+
+function normalizeVideoEffects(effects = {}) {
+  const normalized = {};
+
+  if ("filter" in effects) {
+    normalized.filter = effects.filter || "none";
+  }
+
+  if ("aiFilter" in effects || "ai_filter" in effects) {
+    normalized.aiFilter = effects.aiFilter || effects.ai_filter || "none";
+  }
+
+  if ("sticker" in effects) {
+    normalized.sticker = effects.sticker ?? "";
+  }
+
+  if ("faceDetectEnabled" in effects || "face_detect_enabled" in effects) {
+    normalized.faceDetectEnabled = Boolean(
+      effects.faceDetectEnabled ?? effects.face_detect_enabled,
+    );
+  }
+
+  if ("beautyEnabled" in effects || "beauty_enabled" in effects) {
+    normalized.beautyEnabled = Boolean(effects.beautyEnabled ?? effects.beauty_enabled);
+  }
+
+  [
+    "beautyLevel",
+    "smoothingLevel",
+    "whiteningLevel",
+    "eyeLevel",
+    "faceSlimLevel",
+  ].forEach((key) => {
+    const snakeKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+    const value = effects[key] ?? effects[snakeKey];
+
+    if (value !== undefined) {
+      normalized[key] = clampEffectLevel(value);
+    }
+  });
+
+  if ("makeup" in effects) {
+    normalized.makeup = isPlainObject(effects.makeup) ? { ...effects.makeup } : {};
+  }
+
+  return normalized;
+}
+
+function clampEffectLevel(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(numericValue)));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function getAudioProcessingEnabled(mediaConstraints) {

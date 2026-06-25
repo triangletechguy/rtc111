@@ -14,6 +14,7 @@ Set these for deployed environments:
 export RTC_ADMIN_KEY="change-this-admin-key"
 export RTC_API_KEY="change-this-default-client-key"
 export RTC_TOKEN_SECRET="change-this-token-secret"
+export RTC_BILLING_RATE_PER_MINUTE="0"
 ```
 
 ## 1. Create A Client App
@@ -259,11 +260,30 @@ rtc.connectAndJoin()
 Available Android helpers:
 
 - `RtcServiceSdk.Config.videoCall(...)` and `rtc.joinVideoCall(...)` for one-to-one video calls.
+- `RtcServiceSdk.Config.oneToOneVideoCall(...)` and `rtc.joinOneToOneVideoCall(...)` aliases for private one-to-one video calling.
 - `RtcServiceSdk.Config.groupVideo(...)` and `rtc.joinGroupVideoRoom(...)` for normal group video chat.
 - `RtcServiceSdk.Config.soloVideoLive(...)` and `rtc.joinSoloVideoLive(...)` for solo live video.
 - `RtcServiceSdk.Config.livePk(...)` and `rtc.joinLivePkRoom(...)` for live PK rooms.
 
 Use `rtc_mode` values `video_call`, `group_video`, `solo_live`, or `live_pk` when issuing tokens. One-to-one video rooms are capped to two participants by the service, and the default video token helpers include `screen_share` for screen sharing.
+
+One-to-one video with a default live beauty profile:
+
+```kotlin
+rtc.connectAndJoinOneToOneVideoCall(
+    roomId = "call-user-123-user-456",
+    initialEffects = RtcServiceSdk.VideoEffects.natural().toJson()
+)
+```
+
+Solo live:
+
+```kotlin
+rtc.connectAndJoinSoloVideoLive(
+    roomId = "host-user-123-live",
+    initialEffects = RtcServiceSdk.VideoEffects.glam().toJson()
+)
+```
 
 ## 8. Live Video PK
 
@@ -283,14 +303,17 @@ override fun onLivePkStateChanged(state: org.json.JSONObject) {}
 
 ## 9. Screen Share
 
-Web SDK clients can use browser screen sharing with `startScreenShare()` / `stopScreenShare()`. Android apps should provide their own MediaProjection screen capturer and call:
+Web SDK clients can use browser screen sharing with `startScreenShare()` / `stopScreenShare()`. Android apps can start screen share with Android `MediaProjection` permission data:
 
 ```kotlin
-rtc.setScreenShareEnabled(true)
-rtc.setScreenShareEnabled(false)
+rtc.startScreenShare(
+    mediaProjectionPermissionResultData = resultData,
+    mediaProjectionCallback = mediaProjectionCallback
+)
+rtc.stopScreenShare()
 ```
 
-The backend requires the `screen_share` permission when enabling screen share and broadcasts `screen:state`.
+If the app owns its own screen capturer, pass it directly with `rtc.startScreenShare(screenCapturer)`. The legacy state-only helpers `rtc.setScreenShareEnabled(true)` / `false` remain available when an app replaces tracks itself. The backend requires the `screen_share` permission when enabling screen share and broadcasts `screen:state`.
 
 ## 10. Video Effects, Beauty, Stickers, And Face Detect State
 
@@ -310,9 +333,81 @@ rtc.setVideoEffects(
 )
 ```
 
-The RTC service synchronizes this state; the host Android app still applies the actual camera/render pipeline for beauty, makeup, stickers, and face detection.
+Convenience helpers:
 
-## 11. YouTube Room SDK
+```kotlin
+rtc.setVideoFilter("soft")
+rtc.setAiFilter("portrait")
+rtc.setSticker("crown")
+rtc.setFaceDetectEnabled(true)
+rtc.setBeautyLevels(beautyLevel = 65, smoothingLevel = 55, whiteningLevel = 35)
+rtc.setBeautyMakeup(org.json.JSONObject().put("lipstick", "rose").put("blush", "peach"))
+rtc.applyLiveBeautyPreset("glam")
+rtc.clearVideoEffects()
+```
+
+The SDK synchronizes this live-effects state and exposes `setVideoEffectProcessor(...)` plus `setCameraCapturer(...)` so the host app can plug in its native beauty, makeup, sticker, AI-filter, and face-detection pipeline without UI code in the SDK.
+
+## 11. Messages, Comments, Gifts, And Moderation SDK
+
+Messages/comments are sent through the signaling SDK, run through the backend AI security filter, and support replies, unsend/delete, voice, and image payloads:
+
+```kotlin
+rtc.sendMessage("Hello room")
+rtc.replyToMessage(messageId = "msg-id", text = "Reply text")
+rtc.sendComment("Nice stream")
+rtc.replyToComment(messageId = "comment-id", text = "Reply comment")
+rtc.sendVoiceMessage(mediaUrl = "https://cdn.example/voice.webm", durationSeconds = 4.2)
+rtc.sendImageMessage(mediaUrl = "https://cdn.example/photo.webp", caption = "Look")
+rtc.unsendMessage("msg-id")
+rtc.deleteMessage("msg-id", forMe = true)
+```
+
+Gift sending accepts animated/static assets including `svga`, `svg`, `png`, `jpg`, `webp`, `gif`, `json`, and `lottie`:
+
+```kotlin
+rtc.sendGift(
+    giftId = "rose",
+    name = "Rose",
+    assetUrl = "https://cdn.example/gifts/rose.svga",
+    assetType = "svga",
+    quantity = 1
+)
+```
+
+Room settings/admin/moderation helpers are SDK-only; host apps decide how to render controls:
+
+```kotlin
+rtc.updateRoomProfile(name = "Late Night Live", profilePictureUrl = "https://cdn.example/room.webp")
+rtc.updateRoomMicAmount(6)
+rtc.setPrivateRoomPassword("123456")
+rtc.clearPrivateRoomPassword()
+rtc.setRoomTheme(org.json.JSONObject().put("primary", "#ff4081"))
+rtc.setRoomAnnouncement("Be kind. No spam.")
+rtc.updateRoomAdmins(admins = org.json.JSONArray().put("mod-user-id"))
+rtc.setRoomEntryNotificationEnabled(true)
+rtc.likeRoom()
+rtc.shareRoom("copy_link")
+```
+
+Admin/owner moderation:
+
+```kotlin
+rtc.kickUserFromRoom(targetUserId = "bad-user", reason = "spam", durationSeconds = 600)
+rtc.requestKickHistory()
+rtc.editKickHistory("history-id", org.json.JSONObject().put("reason", "appeal accepted").put("active", false))
+rtc.cleanComments()
+rtc.muteUserMic(targetUserId = "user-123", enabled = false)
+rtc.setChatBan(targetUserId = "user-123", enabled = true, reason = "spam")
+rtc.requestChatBanHistory()
+rtc.blockUser(blockedUserId = "user-456")
+rtc.unblockUser(blockedUserId = "user-456")
+rtc.requestBlockedUsers()
+```
+
+Listen with `onMessageReceived`, `onMessageBlocked`, `onCommentReceived`, `onGiftReceived`, `onRoomUpdated`, `onRoomKicked`, `onRoomKickHistory`, `onParticipantMicMuted`, `onChatBanStateChanged`, and `onUserBlockUpdated`.
+
+## 12. YouTube Room SDK
 
 Create or token a room with `rtc_mode: "youtube"` and include `youtube_control` for hosts/admins:
 
@@ -355,7 +450,7 @@ rtc.seekYoutube(positionSeconds = 45.0)
 
 The backend broadcasts `youtube:state` to every participant in the room. Late joiners receive the latest state with `room:joined`.
 
-## 12. Noise Cancellation Button
+## 13. Noise Cancellation Button
 
 Android and web SDKs expose a direct toggle:
 
@@ -368,7 +463,7 @@ The Android SDK creates WebRTC audio sources with echo cancellation, auto gain c
 
 Room state includes `noiseCancellationEnabled` / `noise_cancellation_enabled` for each participant.
 
-## 13. Android Video SDK Usage
+## 14. Android Video SDK Usage
 
 Add the built SDK AAR to the client Android app, then connect using the token returned by the client's backend.
 
@@ -407,7 +502,50 @@ rtc.attachRenderers(localRenderer, remoteRenderer)
 rtc.connectAndJoin()
 ```
 
-## 14. Build SDK And APK
+## 15. Company Billing And RTC Indicators
+
+Billing is calculated from RTC sessions recorded by `POST /client/rtc/session/start`, `POST /client/rtc/session/end`, and Socket.IO room joins/leaves. No payment gateway is connected.
+
+Platform admin company summary:
+
+```bash
+curl http://localhost:4000/admin/billing/companies \
+  -H "Authorization: Bearer rtc-admin-dev-key"
+```
+
+Single app billing detail:
+
+```bash
+curl http://localhost:4000/admin/apps/acme-android-app/billing \
+  -H "Authorization: Bearer rtc-admin-dev-key"
+```
+
+Client app usage:
+
+```bash
+curl http://localhost:4000/client/billing/usage \
+  -H "Authorization: Bearer CLIENT_API_KEY"
+```
+
+Responses include `used_seconds`, `used_minutes`, `billable_minutes`, `active_sessions`, `estimated_amount`, and `payment_gateway: false`. Set `RTC_BILLING_RATE_PER_MINUTE` to calculate estimated bills; keep it at `0` if you only need minute totals.
+
+Web SDK helpers:
+
+```js
+const adminBilling = await getAdminBilling();
+const appBilling = await getAdminAppBilling({ appId: "acme-android-app" });
+const clientUsage = await getClientBillingUsage();
+```
+
+The Web SDK emits `rtc-connection-indicator` with indicators such as `connecting`, `in_room`, `waiting_for_peer`, `peer_connecting`, `peer_connected`, `reconnecting`, `failed`, and `disconnected`.
+
+```js
+rtcClient.on("rtc-connection-indicator", ({ indicator, peerState }) => {
+  console.log(indicator, peerState);
+});
+```
+
+## 16. Build SDK And APK
 
 Build the reusable RTC Android SDK:
 
@@ -438,7 +576,9 @@ Authorization: Bearer <RTC_ADMIN_KEY>
 
 - `GET /admin/apps`
 - `POST /admin/apps`
+- `GET /admin/billing/companies`
 - `GET /admin/apps/:appId`
+- `GET /admin/apps/:appId/billing`
 - `POST /admin/apps/:appId/keys`
 - `POST /admin/apps/:appId/keys/:keyId/revoke`
 
@@ -459,6 +599,7 @@ Authorization: Bearer <CLIENT_API_KEY>
 - `POST /client/rtc/token/revoke`
 - `POST /client/rtc/session/start`
 - `POST /client/rtc/session/end`
+- `GET /client/billing/usage`
 
 Socket.IO clients authenticate with:
 

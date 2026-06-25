@@ -88,22 +88,38 @@ Video room helpers:
 
 ```kotlin
 RtcServiceSdk.Config.videoCall(signalingUrl, accessToken, roomId)
+RtcServiceSdk.Config.oneToOneVideoCall(signalingUrl, accessToken, roomId)
 RtcServiceSdk.Config.groupVideo(signalingUrl, accessToken, roomId)
 RtcServiceSdk.Config.soloVideoLive(signalingUrl, accessToken, roomId)
 RtcServiceSdk.Config.livePk(signalingUrl, accessToken, roomId)
+RtcServiceSdk.Config.screenShare(signalingUrl, accessToken, roomId)
 ```
 
-Live PK and effects:
+One-to-one video, solo live, Live PK, screen share, and effects:
 
 ```kotlin
+rtc.connectAndJoinOneToOneVideoCall(
+    roomId = "call-user-a-user-b",
+    initialEffects = RtcServiceSdk.VideoEffects.natural().toJson()
+)
+rtc.connectAndJoinSoloVideoLive(
+    roomId = "host-user-a-live",
+    initialEffects = RtcServiceSdk.VideoEffects.glam().toJson()
+)
 rtc.startLivePk(opponentUserId = "user-b")
 rtc.updateLivePkScore(hostScore = 120, opponentScore = 100)
-rtc.setVideoEffects(JSONObject().put("beautyEnabled", true).put("beautyLevel", 65))
-rtc.setScreenShareEnabled(true)
+rtc.startScreenShare(resultData, mediaProjectionCallback)
+rtc.stopScreenShare()
+rtc.setVideoFilter("soft")
+rtc.setAiFilter("portrait")
+rtc.setSticker("crown")
+rtc.setFaceDetectEnabled(true)
+rtc.setBeautyLevels(beautyLevel = 65, smoothingLevel = 55, whiteningLevel = 35)
+rtc.setBeautyMakeup(JSONObject().put("lipstick", "rose"))
+rtc.applyLiveBeautyPreset("glam")
 ```
 
-The SDK synchronizes screen-share, beauty/filter/sticker/makeup, face-detect, and PK state. The host app still applies the actual Android camera/render effects pipeline.
-Default video/live token helpers include `screen_share`; custom backend tokens should include that permission before calling `setScreenShareEnabled(true)`.
+The SDK synchronizes screen-share, beauty/filter/sticker/makeup, face-detect, and PK state. Use `setVideoEffectProcessor(...)` or `setCameraCapturer(...)` to plug in the app's native beauty, AI filter, sticker, makeup, and face-detection pipeline without adding UI code to the SDK. Default video/live token helpers include `screen_share`; custom backend tokens should include that permission before calling `startScreenShare(...)` or `setScreenShareEnabled(true)`.
 
 Security helpers:
 
@@ -128,6 +144,36 @@ Noise cancellation can be attached to a button:
 rtc.setNoiseCancellationEnabled(true)
 rtc.setNoiseCancellationEnabled(false)
 ```
+
+Messages, comments, gifts, and room moderation are SDK calls, not UI:
+
+```kotlin
+rtc.sendMessage("Hello")
+rtc.replyToMessage("msg-id", "Reply")
+rtc.sendComment("Nice")
+rtc.sendVoiceMessage("https://cdn.example/voice.webm", durationSeconds = 3.5)
+rtc.sendImageMessage("https://cdn.example/photo.webp", caption = "Look")
+rtc.unsendMessage("msg-id")
+rtc.deleteMessage("msg-id", forMe = true)
+rtc.sendGift("rose", "Rose", "https://cdn.example/rose.svga", assetType = "svga")
+
+rtc.updateRoomProfile(name = "Live Room", profilePictureUrl = "https://cdn.example/room.webp")
+rtc.updateRoomMicAmount(6)
+rtc.setPrivateRoomPassword("123456")
+rtc.setRoomTheme(JSONObject().put("primary", "#ff4081"))
+rtc.setRoomAnnouncement("Welcome")
+rtc.updateRoomAdmins(admins = JSONArray().put("mod-user-id"))
+rtc.kickUserFromRoom(targetUserId = "bad-user", reason = "spam", durationSeconds = 600)
+rtc.cleanComments()
+rtc.muteUserMic(targetUserId = "user-123")
+rtc.setChatBan(targetUserId = "user-123", enabled = true)
+rtc.blockUser("user-456")
+rtc.unblockUser("user-456")
+rtc.likeRoom()
+rtc.shareRoom("copy_link")
+```
+
+Company-wise billing is handled by the backend/admin API from recorded RTC sessions, not by the Android UI or a payment gateway. Use `GET /admin/billing/companies`, `GET /admin/apps/:appId/billing`, or `GET /client/billing/usage`; set `RTC_BILLING_RATE_PER_MINUTE` only when estimated currency totals are needed.
 
 Do not put the client API key inside the APK. The expected flow is:
 

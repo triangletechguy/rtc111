@@ -9,7 +9,15 @@ export { ChannelRepository, ParticipantRepository,
          SessionRepository, ApiKeyRepository }        from './db/repositories';
 export { ChannelModel, ParticipantModel,
          SessionModel, ApiKeyModel }                  from './models';
+export { RtcClient, createDefaultVideoEffects,
+         createNaturalBeautyEffects,
+         createGlamBeautyEffects }                    from './rtc/RtcClient';
+export { useRtcClient }                               from './rtc/useRtcClient';
 export type { Channel, Participant, Session, ApiKey,
               ChannelType, ChannelStatus,
               ParticipantRole, ConnectionState,
               MediaType }                             from './types';
+export type { RtcClientConfig, RtcSessionInfo,
+              RtcRoomMode, RtcVideoEffects,
+              RtcJoinOptions, RtcEventMap }            from './rtc/RtcClient';
+export type { UseRtcClientResult }                     from './rtc/useRtcClient';

@@ -35,6 +35,7 @@ router.post('/livekit-token', authenticate, async (req, res) => {
       room,
       canPublish:   true,
       canSubscribe: true,
+      canUpdateOwnMetadata: true,
     });
 
     const token = await at.toJwt();

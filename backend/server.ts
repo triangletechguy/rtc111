@@ -15,6 +15,9 @@ const RTC_TOKEN_EXPIRES_IN: SignOptions["expiresIn"] = "1h";
 const RTC_API_KEY = process.env.RTC_API_KEY ?? "rtc-dev-api-key";
 const RTC_ADMIN_KEY = process.env.RTC_ADMIN_KEY ?? "rtc-admin-dev-key";
 const DEFAULT_ROOM_CAPACITY = Number(process.env.RTC_DEFAULT_ROOM_CAPACITY ?? 8);
+const parsedBillingRate = Number(process.env.RTC_BILLING_RATE_PER_MINUTE ?? 0);
+const RTC_BILLING_RATE_PER_MINUTE =
+  Number.isFinite(parsedBillingRate) && parsedBillingRate > 0 ? parsedBillingRate : 0;
 const DEFAULT_CLIENT_APP_ID = "local-rtc-client";
 
 type RtcPermission =
@@ -74,11 +77,21 @@ type RoomRecord = {
   appId: string;
   id: string;
   name: string;
+  profilePictureUrl?: string;
   roomType: string;
   privacyType: string;
   maxParticipants: number;
   maxMicCount: number;
   chatEnabled: boolean;
+  joinEnabled: boolean;
+  entryNotificationsEnabled: boolean;
+  password?: string;
+  theme: Record<string, unknown>;
+  announcement?: RoomAnnouncement;
+  superAdmins: string[];
+  admins: string[];
+  likeCount: number;
+  shareCount: number;
   createdBy?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -162,6 +175,82 @@ type LivePkState = {
   metadata: Record<string, unknown>;
 };
 
+type RoomAnnouncement = {
+  id: string;
+  text: string;
+  pinned: boolean;
+  createdBy: string;
+  updatedAt: string;
+};
+
+type ChatMessageKind = "message" | "comment" | "voice" | "image";
+
+type ChatMessageRecord = {
+  id: string;
+  appId: string;
+  roomId: string;
+  senderSocketId: string;
+  senderUserId: string;
+  senderExternalUserId?: string;
+  kind: ChatMessageKind;
+  text: string;
+  mediaUrl?: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  replyToMessageId?: string;
+  status: "sent" | "unsent" | "deleted";
+  deletedForUserIds: string[];
+  security: ReturnType<typeof evaluateSecurityContent>;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type GiftRecord = {
+  id: string;
+  appId: string;
+  roomId: string;
+  senderSocketId: string;
+  senderUserId: string;
+  senderExternalUserId?: string;
+  giftId: string;
+  name: string;
+  assetUrl: string;
+  assetType: string;
+  quantity: number;
+  receiverUserId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+type RoomHistoryRecord = {
+  id: string;
+  appId: string;
+  roomId: string;
+  targetUserId: string;
+  targetSocketId?: string;
+  actorUserId: string;
+  reason: string;
+  permanent: boolean;
+  expiresAt?: string;
+  active: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type UserBlockRecord = {
+  id: string;
+  appId: string;
+  blockerUserId: string;
+  blockedUserId: string;
+  reason: string;
+  active: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type SecurityIncident = {
   id: string;
   appId: string;
@@ -207,6 +296,12 @@ const activeSessionByUserRoom = new Map<string, string>();
 const roomParticipants = new Map<string, Map<string, ParticipantState>>();
 const youtubeRoomStates = new Map<string, YoutubeRoomState>();
 const livePkStates = new Map<string, LivePkState>();
+const roomMessages = new Map<string, ChatMessageRecord[]>();
+const roomGifts = new Map<string, GiftRecord[]>();
+const roomKickHistory = new Map<string, RoomHistoryRecord[]>();
+const roomChatBanHistory = new Map<string, RoomHistoryRecord[]>();
+const userBlockHistory = new Map<string, UserBlockRecord[]>();
+const roomLikeUsers = new Map<string, Set<string>>();
 const securityIncidents: SecurityIncident[] = [];
 
 /**
@@ -294,9 +389,9 @@ app.get("/", (_req, res) => {
           <h1>RTC Backend is running</h1>
           <p>Socket.IO signaling is listening on <code>localhost:${PORT}</code>.</p>
           <p>Health check: <code>/health</code></p>
-          <p>Admin API: <code>/admin/apps</code></p>
+          <p>Admin API: <code>/admin/apps</code>, <code>/admin/billing/companies</code></p>
           <p>Compatibility token endpoint: <code>POST /rtc-token</code></p>
-          <p>Client API: <code>/client/me</code>, <code>/client/users/sync</code>, <code>/client/rooms</code>, <code>/client/rtc/token</code>, <code>/client/rtc/session/start</code>, <code>/client/rtc/session/end</code></p>
+          <p>Client API: <code>/client/me</code>, <code>/client/users/sync</code>, <code>/client/rooms</code>, <code>/client/rtc/token</code>, <code>/client/rtc/session/start</code>, <code>/client/rtc/session/end</code>, <code>/client/billing/usage</code></p>
         </main>
       </body>
     </html>
@@ -315,6 +410,16 @@ app.get("/health", (_req, res) => {
     issuedTokens: issuedRtcTokens.size,
     activeTokens: Array.from(issuedRtcTokens.values()).filter((token) => isStoredTokenActive(token)).length,
     activeSessions: Array.from(sessions.values()).filter((session) => !session.endedAt).length,
+    usedRtcMinutes: roundNumber(
+      Array.from(sessions.values()).reduce(
+        (totalSeconds, session) => totalSeconds + getSessionDurationSeconds(session),
+        0,
+      ) / 60,
+    ),
+    billableRtcMinutes: Array.from(sessions.values()).reduce(
+      (totalMinutes, session) => totalMinutes + getSessionBillableMinutes(session),
+      0,
+    ),
     connectedParticipants: Array.from(roomParticipants.values()).reduce(
       (count, participants) => count + participants.size,
       0,
@@ -325,6 +430,25 @@ app.get("/health", (_req, res) => {
 app.get("/admin/apps", requireAdminAuth, (_req, res) => {
   res.json({
     apps: Array.from(clientApps.values()).map(serializeClientApp),
+  });
+});
+
+app.get("/admin/billing/companies", requireAdminAuth, (_req, res) => {
+  const generatedAt = new Date().toISOString();
+  const billing = Array.from(clientApps.values()).map((clientApp) =>
+    getCompanyBillingSummary(clientApp.id, { generatedAt }),
+  );
+
+  res.json({
+    generatedAt,
+    generated_at: generatedAt,
+    ratePerMinute: RTC_BILLING_RATE_PER_MINUTE,
+    rate_per_minute: RTC_BILLING_RATE_PER_MINUTE,
+    currency: "USD",
+    paymentGateway: false,
+    payment_gateway: false,
+    billing,
+    companies: billing,
   });
 });
 
@@ -378,6 +502,27 @@ app.get("/admin/apps/:appId", requireAdminAuth, (req, res) => {
     apiKeys: Array.from(apiKeysBySecret.values())
       .filter((apiKey) => apiKey.appId === appId)
       .map((apiKey) => serializeApiKey(apiKey)),
+  });
+});
+
+app.get("/admin/apps/:appId/billing", requireAdminAuth, (req, res) => {
+  const appId = readString(req.params.appId);
+  const clientApp = clientApps.get(appId);
+
+  if (!clientApp) {
+    res.status(404).json({ error: "Client app not found" });
+    return;
+  }
+
+  const generatedAt = new Date().toISOString();
+
+  res.json({
+    generatedAt,
+    generated_at: generatedAt,
+    billing: getCompanyBillingSummary(appId, {
+      generatedAt,
+      includeSessions: true,
+    }),
   });
 });
 
@@ -463,6 +608,7 @@ app.get("/client/me", requireClientAuth, (req, res) => {
       "rtc.ai_security",
       "rtc.token.saved_validation",
       "rtc.connection_indicator",
+      "billing.usage",
     ],
   });
 });
@@ -512,6 +658,7 @@ app.post("/client/rooms", requireClientAuth, (req, res) => {
   const defaultCapacity = getDefaultRoomCapacityForMode(roomType);
   let room = ensureRoom(clientApp.id, roomId, {
     name: readString(req.body?.name) || `Room ${roomId}`,
+    profilePictureUrl: readString(req.body?.profile_picture_url) || readString(req.body?.profilePictureUrl),
     roomType,
     privacyType: readString(req.body?.privacy_type) || readString(req.body?.privacyType) || "public",
     maxParticipants: readPositiveNumber(req.body?.max_participants)
@@ -523,6 +670,16 @@ app.post("/client/rooms", requireClientAuth, (req, res) => {
       ?? readPositiveNumber(req.body?.maxMicCount)
       ?? defaultCapacity.maxMicCount,
     chatEnabled: readBoolean(req.body?.chat_enabled, readBoolean(req.body?.chatEnabled, true)),
+    joinEnabled: readBoolean(req.body?.join_enabled, readBoolean(req.body?.joinEnabled, true)),
+    entryNotificationsEnabled: readBoolean(
+      req.body?.entry_notifications_enabled,
+      readBoolean(req.body?.entryNotificationsEnabled, true),
+    ),
+    password: readString(req.body?.password) || readString(req.body?.room_password) || readString(req.body?.roomPassword),
+    theme: readRecord(req.body?.theme) ?? {},
+    announcement: readAnnouncement(req.body?.announcement, externalUserId || "system"),
+    superAdmins: readStringArray(req.body?.super_admins ?? req.body?.superAdmins),
+    admins: readStringArray(req.body?.admins),
     createdBy: externalUserId,
     metadata: readRecord(req.body?.metadata) ?? {},
   });
@@ -659,6 +816,20 @@ app.post("/client/rtc/session/end", requireClientAuth, (req, res) => {
 
   const session = endSession(clientApp.id, roomId, externalUserId);
   res.json({ ended: Boolean(session), session });
+});
+
+app.get("/client/billing/usage", requireClientAuth, (req, res) => {
+  const clientApp = getClientApp(req);
+  const generatedAt = new Date().toISOString();
+
+  res.json({
+    generatedAt,
+    generated_at: generatedAt,
+    billing: getCompanyBillingSummary(clientApp.id, {
+      generatedAt,
+      includeSessions: true,
+    }),
+  });
 });
 
 /**
@@ -837,6 +1008,29 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const userKey = externalUserId || readString(socket.data.userId);
+    const activeKick = findActiveRoomHistoryRecord(roomKickHistory, appId, roomId, userKey);
+
+    if (activeKick) {
+      socket.emit("room:error", {
+        message: activeKick.permanent ? "User is permanently kicked from this room" : "User is temporarily kicked from this room",
+        kick: serializeRoomHistoryRecord(activeKick),
+      });
+      return;
+    }
+
+    if (!room.joinEnabled && !canManageRoomByIdentity(room, userKey, socket.data.role as string | undefined)) {
+      socket.emit("room:error", { message: "Room join is disabled" });
+      return;
+    }
+
+    const password = readString(payload.password ?? payload.roomPassword ?? payload.room_password);
+
+    if (room.password && room.password !== password && !canManageRoomByIdentity(room, userKey, socket.data.role as string | undefined)) {
+      socket.emit("room:error", { message: "Room password is required" });
+      return;
+    }
+
     if (previousRoomId && previousRoomId !== roomId) {
       leaveCurrentRoom(socket, "joined-another-room");
     }
@@ -957,8 +1151,23 @@ io.on("connection", (socket) => {
       socket.emit("live:pk:state", livePkState);
     }
 
+    socket.emit("message:history", {
+      messages: getRoomMessages(appId, roomId).slice(-50).map(serializeChatMessage),
+    });
+
+    socket.emit("gift:history", {
+      gifts: getRoomGifts(appId, roomId).slice(-50).map(serializeGift),
+    });
+
     socket.to(roomChannel(appId, roomId)).emit("user-joined", socket.id);
     socket.to(roomChannel(appId, roomId)).emit("participant:joined", serializeParticipant(participant));
+    if (room.entryNotificationsEnabled) {
+      socket.to(roomChannel(appId, roomId)).emit("room:entry", {
+        participant: serializeParticipant(participant),
+        message: `${participant.externalUserId ?? participant.userId} joined the room`,
+        createdAt: new Date().toISOString(),
+      });
+    }
     io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
   });
 
@@ -1290,6 +1499,182 @@ io.on("connection", (socket) => {
       emitSecurityIncident(appId, roomId, incident);
     } else {
       socket.emit("security:incident", incident);
+    }
+  });
+
+  socket.on("message:send", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    handleSendRoomMessage(socket, payload, undefined, callback);
+  });
+
+  socket.on("comment:send", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    handleSendRoomMessage(socket, payload, "comment", callback);
+  });
+
+  socket.on("message:list", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const result = withJoinedParticipant(socket, "message:error", (context) => {
+      const limit = readBoundedNumber(payload.limit, 50, 1, 200);
+      return { messages: getRoomMessages(context.appId, context.roomId).slice(-limit).map(serializeChatMessage) };
+    });
+
+    if (callback) {
+      callback(result);
+    } else {
+      socket.emit("message:history", result);
+    }
+  });
+
+  socket.on("message:unsend", (payload: Record<string, unknown> = {}) => {
+    updateMessageStatus(socket, payload, "unsent");
+  });
+
+  socket.on("message:delete", (payload: Record<string, unknown> = {}) => {
+    updateMessageStatus(socket, payload, "deleted");
+  });
+
+  socket.on("gift:send", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const result = withJoinedParticipant(socket, "gift:error", ({ appId, roomId, participant }) => {
+      const assetUrl = readString(payload.assetUrl ?? payload.asset_url ?? payload.url);
+      const assetType = normalizeGiftAssetType(payload.assetType ?? payload.asset_type ?? assetUrl);
+
+      if (!assetUrl || !assetType) {
+        return { error: "Gift asset must be svga, svg, png, jpg, jpeg, webp, gif, json, or lottie" };
+      }
+
+      const gift: GiftRecord = {
+        id: randomUUID(),
+        appId,
+        roomId,
+        senderSocketId: socket.id,
+        senderUserId: participant.userId,
+        senderExternalUserId: participant.externalUserId,
+        giftId: readString(payload.giftId ?? payload.gift_id) || randomUUID(),
+        name: readString(payload.name) || "Gift",
+        assetUrl,
+        assetType,
+        quantity: readBoundedNumber(payload.quantity, 1, 1, 999),
+        receiverUserId: readString(payload.receiverUserId ?? payload.receiver_user_id),
+        metadata: readRecord(payload.metadata) ?? {},
+        createdAt: new Date().toISOString(),
+      };
+
+      getRoomGifts(appId, roomId).push(gift);
+      trimRecords(getRoomGifts(appId, roomId), 500);
+      io.to(roomChannel(appId, roomId)).emit("gift:received", serializeGift(gift));
+      return { gift: serializeGift(gift) };
+    });
+
+    callback?.(result);
+  });
+
+  socket.on("room:profile:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomProfile(socket, payload);
+  });
+
+  socket.on("room:settings:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomSettings(socket, payload);
+  });
+
+  socket.on("room:theme:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomTheme(socket, payload);
+  });
+
+  socket.on("room:announcement:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomAnnouncement(socket, payload);
+  });
+
+  socket.on("room:admins:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomAdmins(socket, payload);
+  });
+
+  socket.on("room:kick", (payload: Record<string, unknown> = {}) => {
+    kickRoomUser(socket, payload);
+  });
+
+  socket.on("room:kick:history:list", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const result = withJoinedParticipant(socket, "room:error", ({ appId, roomId, participant }) => {
+      if (!canManageRoom(participant, ensureRoom(appId, roomId))) {
+        return { error: "Only room admins can read kick history" };
+      }
+
+      return {
+        history: getRoomHistory(roomKickHistory, appId, roomId).map(serializeRoomHistoryRecord),
+      };
+    });
+
+    if (callback) {
+      callback(result);
+    } else {
+      socket.emit("room:kick:history", result);
+    }
+  });
+
+  socket.on("room:kick:history:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomHistoryRecord(socket, payload, roomKickHistory, "room:kick:history");
+  });
+
+  socket.on("room:comments:clean", (payload: Record<string, unknown> = {}) => {
+    cleanRoomComments(socket, payload);
+  });
+
+  socket.on("comment:clean", (payload: Record<string, unknown> = {}) => {
+    cleanRoomComments(socket, payload);
+  });
+
+  socket.on("participant:mic:mute", (payload: Record<string, unknown> = {}) => {
+    muteParticipantMic(socket, payload);
+  });
+
+  socket.on("chat:ban", (payload: Record<string, unknown> = {}) => {
+    setChatBan(socket, payload);
+  });
+
+  socket.on("chat:ban:history:list", (payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const result = withJoinedParticipant(socket, "chat:error", ({ appId, roomId, participant }) => {
+      if (!canManageRoom(participant, ensureRoom(appId, roomId))) {
+        return { error: "Only room admins can read chat ban history" };
+      }
+
+      return {
+        history: getRoomHistory(roomChatBanHistory, appId, roomId).map(serializeRoomHistoryRecord),
+      };
+    });
+
+    if (callback) {
+      callback(result);
+    } else {
+      socket.emit("chat:ban:history", result);
+    }
+  });
+
+  socket.on("chat:ban:history:update", (payload: Record<string, unknown> = {}) => {
+    updateRoomHistoryRecord(socket, payload, roomChatBanHistory, "chat:ban:history");
+  });
+
+  socket.on("room:like", (_payload: Record<string, unknown> = {}) => {
+    likeRoom(socket);
+  });
+
+  socket.on("room:share", (payload: Record<string, unknown> = {}) => {
+    shareRoom(socket, payload);
+  });
+
+  socket.on("user:block", (payload: Record<string, unknown> = {}) => {
+    setUserBlock(socket, payload, true);
+  });
+
+  socket.on("user:unblock", (payload: Record<string, unknown> = {}) => {
+    setUserBlock(socket, payload, false);
+  });
+
+  socket.on("user:block:list", (_payload: Record<string, unknown> = {}, callback?: (result: unknown) => void) => {
+    const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+    const blockerUserId = getSocketUserKey(socket);
+    const blocks = getUserBlockHistory(appId, blockerUserId).map(serializeUserBlockRecord);
+    const result = { blocks };
+    if (callback) {
+      callback(result);
+    } else {
+      socket.emit("user:block:history", result);
     }
   });
 
@@ -1790,6 +2175,13 @@ function ensureRoom(appId: string, roomId: string, overrides: Partial<RoomRecord
       ...overrides,
       appId,
       id: roomId,
+      theme: overrides.theme ?? existing.theme ?? {},
+      superAdmins: overrides.superAdmins ?? existing.superAdmins ?? [],
+      admins: overrides.admins ?? existing.admins ?? [],
+      joinEnabled: overrides.joinEnabled ?? existing.joinEnabled ?? true,
+      entryNotificationsEnabled: overrides.entryNotificationsEnabled ?? existing.entryNotificationsEnabled ?? true,
+      likeCount: overrides.likeCount ?? existing.likeCount ?? 0,
+      shareCount: overrides.shareCount ?? existing.shareCount ?? 0,
       metadata: overrides.metadata ?? existing.metadata,
       updatedAt: now,
     };
@@ -1806,6 +2198,15 @@ function ensureRoom(appId: string, roomId: string, overrides: Partial<RoomRecord
     maxParticipants: overrides.maxParticipants ?? DEFAULT_ROOM_CAPACITY,
     maxMicCount: overrides.maxMicCount ?? DEFAULT_ROOM_CAPACITY,
     chatEnabled: overrides.chatEnabled ?? true,
+    joinEnabled: overrides.joinEnabled ?? true,
+    entryNotificationsEnabled: overrides.entryNotificationsEnabled ?? true,
+    password: overrides.password,
+    theme: overrides.theme ?? {},
+    announcement: overrides.announcement,
+    superAdmins: overrides.superAdmins ?? [],
+    admins: overrides.admins ?? [],
+    likeCount: overrides.likeCount ?? 0,
+    shareCount: overrides.shareCount ?? 0,
     createdBy: overrides.createdBy,
     metadata: overrides.metadata ?? {},
     createdAt: now,
@@ -1839,6 +2240,164 @@ function ensureRoomForRtcMode(appId: string, roomId: string, rtcMode: string) {
     maxParticipants: capacity.maxParticipants,
     maxMicCount: capacity.maxMicCount,
   });
+}
+
+function getCompanyBillingSummary(
+  appId: string,
+  {
+    generatedAt = new Date().toISOString(),
+    includeSessions = false,
+  }: { generatedAt?: string; includeSessions?: boolean } = {},
+) {
+  const clientApp = clientApps.get(appId);
+  const now = Date.parse(generatedAt);
+  const timestamp = Number.isFinite(now) ? now : Date.now();
+  const appSessions = Array.from(sessions.values()).filter((session) => session.appId === appId);
+  const usageByMode: Record<
+    string,
+    {
+      rtcMode: string;
+      rtc_mode: string;
+      usedSeconds: number;
+      used_seconds: number;
+      usedMinutes: number;
+      used_minutes: number;
+      billableMinutes: number;
+      billable_minutes: number;
+      sessions: number;
+      activeSessions: number;
+      active_sessions: number;
+    }
+  > = {};
+
+  let usedSeconds = 0;
+  let billableMinutes = 0;
+  let activeSessions = 0;
+
+  for (const session of appSessions) {
+    const durationSeconds = getSessionDurationSeconds(session, timestamp);
+    const sessionBillableMinutes = getSessionBillableMinutes(session, timestamp);
+    const rtcMode = normalizeRtcMode(session.rtcMode);
+
+    usedSeconds += durationSeconds;
+    billableMinutes += sessionBillableMinutes;
+
+    if (!session.endedAt) {
+      activeSessions += 1;
+    }
+
+    const existingMode = usageByMode[rtcMode] ?? {
+      rtcMode,
+      rtc_mode: rtcMode,
+      usedSeconds: 0,
+      used_seconds: 0,
+      usedMinutes: 0,
+      used_minutes: 0,
+      billableMinutes: 0,
+      billable_minutes: 0,
+      sessions: 0,
+      activeSessions: 0,
+      active_sessions: 0,
+    };
+
+    existingMode.usedSeconds += durationSeconds;
+    existingMode.used_seconds = existingMode.usedSeconds;
+    existingMode.usedMinutes = roundNumber(existingMode.usedSeconds / 60);
+    existingMode.used_minutes = existingMode.usedMinutes;
+    existingMode.billableMinutes += sessionBillableMinutes;
+    existingMode.billable_minutes = existingMode.billableMinutes;
+    existingMode.sessions += 1;
+
+    if (!session.endedAt) {
+      existingMode.activeSessions += 1;
+      existingMode.active_sessions = existingMode.activeSessions;
+    }
+
+    usageByMode[rtcMode] = existingMode;
+  }
+
+  const estimatedAmount = roundNumber(billableMinutes * RTC_BILLING_RATE_PER_MINUTE);
+  const recentSessions = [...appSessions]
+    .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+    .slice(0, 100)
+    .map((session) => serializeBillingSession(session, timestamp));
+
+  return {
+    appId,
+    app_id: appId,
+    companyName: clientApp?.name ?? appId,
+    company_name: clientApp?.name ?? appId,
+    totalSessions: appSessions.length,
+    total_sessions: appSessions.length,
+    activeSessions,
+    active_sessions: activeSessions,
+    usedSeconds,
+    used_seconds: usedSeconds,
+    usedMinutes: roundNumber(usedSeconds / 60),
+    used_minutes: roundNumber(usedSeconds / 60),
+    billableMinutes,
+    billable_minutes: billableMinutes,
+    ratePerMinute: RTC_BILLING_RATE_PER_MINUTE,
+    rate_per_minute: RTC_BILLING_RATE_PER_MINUTE,
+    estimatedAmount,
+    estimated_amount: estimatedAmount,
+    currency: "USD",
+    paymentGateway: false,
+    payment_gateway: false,
+    usageByMode: Object.values(usageByMode),
+    usage_by_mode: Object.values(usageByMode),
+    generatedAt,
+    generated_at: generatedAt,
+    ...(includeSessions ? { sessions: recentSessions } : {}),
+  };
+}
+
+function serializeBillingSession(session: SessionRecord, now = Date.now()) {
+  const durationSeconds = getSessionDurationSeconds(session, now);
+  const billableMinutes = getSessionBillableMinutes(session, now);
+  const estimatedAmount = roundNumber(billableMinutes * RTC_BILLING_RATE_PER_MINUTE);
+
+  return {
+    ...session,
+    active: !session.endedAt,
+    durationSeconds,
+    duration_seconds: durationSeconds,
+    usedMinutes: roundNumber(durationSeconds / 60),
+    used_minutes: roundNumber(durationSeconds / 60),
+    billableMinutes,
+    billable_minutes: billableMinutes,
+    estimatedAmount,
+    estimated_amount: estimatedAmount,
+  };
+}
+
+function getSessionDurationSeconds(session: SessionRecord, now = Date.now()) {
+  const startedAt = Date.parse(session.startedAt);
+  const endedAt = session.endedAt ? Date.parse(session.endedAt) : now;
+
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.ceil((endedAt - startedAt) / 1000));
+}
+
+function getSessionBillableMinutes(session: SessionRecord, now = Date.now()) {
+  const durationSeconds = getSessionDurationSeconds(session, now);
+
+  if (durationSeconds === 0) {
+    return 0;
+  }
+
+  return Math.ceil(durationSeconds / 60);
+}
+
+function roundNumber(value: number, fractionDigits = 2) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Number(value.toFixed(fractionDigits));
 }
 
 function startSession(input: Omit<SessionRecord, "id" | "startedAt">) {
@@ -2074,6 +2633,546 @@ function emitSecurityIncident(appId: string, roomId: string | undefined, inciden
   io.to(roomChannel(appId, roomId)).emit("security:incident", incident);
 }
 
+function withJoinedParticipant<T>(
+  socket: Socket,
+  errorEvent: string,
+  handler: (context: {
+    appId: string;
+    roomId: string;
+    room: RoomRecord;
+    participants: Map<string, ParticipantState>;
+    participant: ParticipantState;
+  }) => T,
+) {
+  const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+  const roomId = socket.data.roomId as string | undefined;
+
+  if (!roomId) {
+    const error = { error: "Join a room before using this SDK function" };
+    socket.emit(errorEvent, error);
+    return error;
+  }
+
+  const participants = getParticipants(appId, roomId);
+  const participant = participants.get(socket.id);
+
+  if (!participant) {
+    const error = { error: "Participant is not in this room" };
+    socket.emit(errorEvent, error);
+    return error;
+  }
+
+  return handler({
+    appId,
+    roomId,
+    room: ensureRoom(appId, roomId),
+    participants,
+    participant,
+  });
+}
+
+function handleSendRoomMessage(
+  socket: Socket,
+  payload: Record<string, unknown>,
+  kindOverride?: ChatMessageKind,
+  callback?: (result: unknown) => void,
+) {
+  const result = withJoinedParticipant(socket, "message:error", ({ appId, roomId, room, participant }) => {
+    if (!room.chatEnabled) {
+      return { error: "Room chat is disabled" };
+    }
+
+    if (!participant.permissions.includes("chat") && !participant.permissions.includes("moderate")) {
+      return { error: "Token does not allow chat" };
+    }
+
+    const senderUserId = participant.externalUserId ?? participant.userId;
+    const activeBan = findActiveRoomHistoryRecord(roomChatBanHistory, appId, roomId, senderUserId);
+
+    if (activeBan && !canManageRoom(participant, room)) {
+      return {
+        error: "User is chat banned in this room",
+        ban: serializeRoomHistoryRecord(activeBan),
+      };
+    }
+
+    const kind = kindOverride ?? readMessageKind(payload.kind ?? payload.type);
+    const text = readString(payload.text ?? payload.message ?? payload.content ?? payload.caption);
+    const mediaUrl = readString(payload.mediaUrl ?? payload.media_url ?? payload.url);
+    const mimeType = readString(payload.mimeType ?? payload.mime_type);
+
+    if ((kind === "message" || kind === "comment") && !text) {
+      return { error: "Message text is required" };
+    }
+
+    if (kind === "voice" && !isAllowedVoiceMedia(mediaUrl, mimeType)) {
+      return { error: "Voice message requires an audio media URL" };
+    }
+
+    if (kind === "image" && !isAllowedImageMedia(mediaUrl, mimeType)) {
+      return { error: "Image message requires png, jpg, jpeg, webp, gif, svg, or svga media" };
+    }
+
+    const securityText = [text, readString(payload.altText ?? payload.alt_text), mediaUrl].filter(Boolean).join(" ");
+    const security = evaluateSecurityContent(securityText, kind);
+
+    if (!security.allowed) {
+      const incident = recordSecurityIncident({
+        appId,
+        roomId,
+        reporterSocketId: socket.id,
+        reporterUserId: senderUserId,
+        category: `message_${kind}`,
+        severity: security.severity,
+        message: security.reason,
+        blocked: true,
+        metadata: {
+          signals: security.signals,
+          text,
+          mediaUrl,
+        },
+      });
+
+      emitSecurityIncident(appId, roomId, incident);
+      const blocked = {
+        allowed: false,
+        security,
+        incident,
+      };
+      socket.emit("message:blocked", blocked);
+      return blocked;
+    }
+
+    const now = new Date().toISOString();
+    const message: ChatMessageRecord = {
+      id: randomUUID(),
+      appId,
+      roomId,
+      senderSocketId: socket.id,
+      senderUserId: participant.userId,
+      senderExternalUserId: participant.externalUserId,
+      kind,
+      text,
+      mediaUrl,
+      mimeType,
+      durationSeconds: readNonNegativeNumber(payload.durationSeconds ?? payload.duration_seconds, 0),
+      replyToMessageId: readString(payload.replyToMessageId ?? payload.reply_to_message_id),
+      status: "sent",
+      deletedForUserIds: [],
+      security,
+      metadata: readRecord(payload.metadata) ?? {},
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    getRoomMessages(appId, roomId).push(message);
+    trimRecords(getRoomMessages(appId, roomId), 1000);
+
+    const eventName = kind === "comment" ? "comment:received" : "message:received";
+    io.to(roomChannel(appId, roomId)).emit(eventName, serializeChatMessage(message));
+    io.to(roomChannel(appId, roomId)).emit("message:received", serializeChatMessage(message));
+    return { message: serializeChatMessage(message) };
+  });
+
+  callback?.(result);
+}
+
+function updateMessageStatus(socket: Socket, payload: Record<string, unknown>, status: "unsent" | "deleted") {
+  withJoinedParticipant(socket, "message:error", ({ appId, roomId, room, participant }) => {
+    const messageId = readString(payload.messageId ?? payload.message_id ?? payload.id);
+    const message = getRoomMessages(appId, roomId).find((item) => item.id === messageId);
+
+    if (!message) {
+      return { error: "Message was not found" };
+    }
+
+    const senderUserId = message.senderExternalUserId ?? message.senderUserId;
+    const participantUserId = participant.externalUserId ?? participant.userId;
+
+    if (senderUserId !== participantUserId && !canManageRoom(participant, room)) {
+      return { error: "Only sender or room admin can update this message" };
+    }
+
+    if (status === "deleted" && readBoolean(payload.forMe ?? payload.for_me, false)) {
+      if (!message.deletedForUserIds.includes(participantUserId)) {
+        message.deletedForUserIds.push(participantUserId);
+      }
+    } else {
+      message.status = status;
+    }
+
+    message.updatedAt = new Date().toISOString();
+    const eventName = status === "unsent" ? "message:unsent" : "message:deleted";
+    io.to(roomChannel(appId, roomId)).emit(eventName, serializeChatMessage(message));
+    io.to(roomChannel(appId, roomId)).emit("message:updated", serializeChatMessage(message));
+    return { message: serializeChatMessage(message) };
+  });
+}
+
+function updateRoomProfile(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update room profile" };
+    }
+
+    const updated = ensureRoom(appId, roomId, {
+      name: readString(payload.name) || room.name,
+      profilePictureUrl: readString(payload.profilePictureUrl ?? payload.profile_picture_url) || room.profilePictureUrl,
+    });
+
+    emitRoomUpdated(appId, roomId, updated, "room:profile");
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function updateRoomSettings(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update room settings" };
+    }
+
+    const clearPassword = readBoolean(payload.clearPassword ?? payload.clear_password, false);
+    const password = readString(payload.password ?? payload.roomPassword ?? payload.room_password);
+    const updated = ensureRoom(appId, roomId, {
+      maxParticipants: readPositiveNumber(payload.maxParticipants ?? payload.max_participants) ?? room.maxParticipants,
+      maxMicCount: readPositiveNumber(payload.maxMicCount ?? payload.max_mic_count ?? payload.micAmount ?? payload.mic_amount) ?? room.maxMicCount,
+      chatEnabled: readBoolean(payload.chatEnabled ?? payload.chat_enabled, room.chatEnabled),
+      joinEnabled: readBoolean(payload.joinEnabled ?? payload.join_enabled, room.joinEnabled),
+      entryNotificationsEnabled: readBoolean(
+        payload.entryNotificationsEnabled ?? payload.entry_notifications_enabled,
+        room.entryNotificationsEnabled,
+      ),
+      privacyType: readString(payload.privacyType ?? payload.privacy_type) || (password ? "private" : room.privacyType),
+      password: clearPassword ? undefined : password || room.password,
+    });
+
+    emitRoomUpdated(appId, roomId, updated, "room:settings");
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function updateRoomTheme(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update room theme" };
+    }
+
+    const theme = readRecord(payload.theme) ?? payload;
+    const updated = ensureRoom(appId, roomId, {
+      theme: {
+        ...room.theme,
+        ...theme,
+      },
+    });
+
+    emitRoomUpdated(appId, roomId, updated, "room:theme");
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function updateRoomAnnouncement(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update announcements" };
+    }
+
+    const text = readString(payload.text ?? payload.message ?? payload.announcement);
+    const announcement = text
+      ? {
+        id: readString(payload.id) || room.announcement?.id || randomUUID(),
+        text,
+        pinned: readBoolean(payload.pinned, true),
+        createdBy: participant.externalUserId ?? participant.userId,
+        updatedAt: new Date().toISOString(),
+      }
+      : undefined;
+    const updated = ensureRoom(appId, roomId, { announcement });
+
+    io.to(roomChannel(appId, roomId)).emit("room:announcement", updated.announcement ?? null);
+    emitRoomUpdated(appId, roomId, updated, "room:announcement");
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function updateRoomAdmins(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update admin settings" };
+    }
+
+    const updated = ensureRoom(appId, roomId, {
+      superAdmins: readStringArray(payload.superAdmins ?? payload.super_admins).length
+        ? readStringArray(payload.superAdmins ?? payload.super_admins)
+        : room.superAdmins,
+      admins: readStringArray(payload.admins).length ? readStringArray(payload.admins) : room.admins,
+    });
+
+    emitRoomUpdated(appId, roomId, updated, "room:admins");
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function kickRoomUser(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participants, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can kick users" };
+    }
+
+    const target = findParticipant(participants, payload);
+    const targetUserId = readString(payload.targetUserId ?? payload.target_user_id)
+      || target?.externalUserId
+      || target?.userId;
+
+    if (!targetUserId) {
+      return { error: "targetUserId or targetSocketId is required" };
+    }
+
+    const now = new Date().toISOString();
+    const durationSeconds = readNonNegativeNumber(payload.durationSeconds ?? payload.duration_seconds, 0);
+    const permanent = readBoolean(payload.permanent, durationSeconds <= 0);
+    const record: RoomHistoryRecord = {
+      id: randomUUID(),
+      appId,
+      roomId,
+      targetUserId,
+      targetSocketId: target?.socketId ?? readString(payload.targetSocketId ?? payload.target_socket_id),
+      actorUserId: participant.externalUserId ?? participant.userId,
+      reason: readString(payload.reason) || "Kicked from room",
+      permanent,
+      expiresAt: permanent ? undefined : new Date(Date.now() + durationSeconds * 1000).toISOString(),
+      active: true,
+      metadata: readRecord(payload.metadata) ?? {},
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    getRoomHistory(roomKickHistory, appId, roomId).push(record);
+    emitRoomHistory(appId, roomId, "room:kick:history", roomKickHistory);
+
+    if (target) {
+      io.to(target.socketId).emit("room:kicked", serializeRoomHistoryRecord(record));
+      const targetSocket = io.sockets.sockets.get(target.socketId);
+      if (targetSocket) {
+        leaveCurrentRoom(targetSocket, "kicked", true);
+      }
+    }
+
+    return { kick: serializeRoomHistoryRecord(record) };
+  });
+}
+
+function updateRoomHistoryRecord(
+  socket: Socket,
+  payload: Record<string, unknown>,
+  store: Map<string, RoomHistoryRecord[]>,
+  eventName: string,
+) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can edit history" };
+    }
+
+    const id = readString(payload.id ?? payload.historyId ?? payload.history_id);
+    const record = getRoomHistory(store, appId, roomId).find((item) => item.id === id);
+
+    if (!record) {
+      return { error: "History record was not found" };
+    }
+
+    record.reason = readString(payload.reason) || record.reason;
+    record.active = readBoolean(payload.active, record.active);
+    record.metadata = readRecord(payload.metadata) ?? record.metadata;
+    record.updatedAt = new Date().toISOString();
+
+    emitRoomHistory(appId, roomId, eventName, store);
+    return { history: serializeRoomHistoryRecord(record) };
+  });
+}
+
+function cleanRoomComments(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can clean comments" };
+    }
+
+    const targetUserId = readString(payload.targetUserId ?? payload.target_user_id);
+    const cleanedIds: string[] = [];
+
+    getRoomMessages(appId, roomId).forEach((message) => {
+      const senderUserId = message.senderExternalUserId ?? message.senderUserId;
+      if (message.kind === "comment" && (!targetUserId || senderUserId === targetUserId)) {
+        message.status = "deleted";
+        message.updatedAt = new Date().toISOString();
+        cleanedIds.push(message.id);
+      }
+    });
+
+    const event = {
+      cleanedIds,
+      cleaned_ids: cleanedIds,
+      targetUserId,
+      target_user_id: targetUserId,
+      updatedBy: participant.externalUserId ?? participant.userId,
+      updated_at: new Date().toISOString(),
+    };
+    io.to(roomChannel(appId, roomId)).emit("comment:cleaned", event);
+    return event;
+  });
+}
+
+function muteParticipantMic(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participants, participant }) => {
+    const target = findParticipant(participants, payload);
+
+    if (!target) {
+      return { error: "Target participant was not found" };
+    }
+
+    const targetUserId = target.externalUserId ?? target.userId;
+    const actorUserId = participant.externalUserId ?? participant.userId;
+    const canMute = target.socketId === participant.socketId || actorUserId === targetUserId || canManageRoom(participant, room);
+
+    if (!canMute) {
+      return { error: "Only user, admin, or owner can change this mic state" };
+    }
+
+    const enabled = readBoolean(payload.enabled ?? payload.micEnabled ?? payload.mic_enabled, false);
+    target.micEnabled = enabled;
+    target.lastSeenAt = new Date().toISOString();
+
+    io.to(target.socketId).emit("participant:mic:muted", {
+      participant: serializeParticipant(target),
+      micEnabled: enabled,
+      mic_enabled: enabled,
+      updatedBy: actorUserId,
+      updated_by: actorUserId,
+    });
+    io.to(roomChannel(appId, roomId)).emit("participant:updated", serializeParticipant(target));
+    io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
+    return { participant: serializeParticipant(target) };
+  });
+}
+
+function setChatBan(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "chat:error", ({ appId, roomId, room, participant }) => {
+    if (!canManageRoom(participant, room)) {
+      return { error: "Only room admins can update chat bans" };
+    }
+
+    const targetUserId = readString(payload.targetUserId ?? payload.target_user_id);
+    if (!targetUserId) {
+      return { error: "targetUserId is required" };
+    }
+
+    const enabled = readBoolean(payload.enabled, true);
+    const existing = findActiveRoomHistoryRecord(roomChatBanHistory, appId, roomId, targetUserId);
+
+    if (!enabled && existing) {
+      existing.active = false;
+      existing.updatedAt = new Date().toISOString();
+      emitRoomHistory(appId, roomId, "chat:ban:history", roomChatBanHistory);
+      io.to(roomChannel(appId, roomId)).emit("chat:ban", serializeRoomHistoryRecord(existing));
+      return { ban: serializeRoomHistoryRecord(existing) };
+    }
+
+    if (!enabled) {
+      return { ban: null };
+    }
+
+    const durationSeconds = readNonNegativeNumber(payload.durationSeconds ?? payload.duration_seconds, 0);
+    const permanent = readBoolean(payload.permanent, durationSeconds <= 0);
+    const now = new Date().toISOString();
+    const ban: RoomHistoryRecord = {
+      id: randomUUID(),
+      appId,
+      roomId,
+      targetUserId,
+      actorUserId: participant.externalUserId ?? participant.userId,
+      reason: readString(payload.reason) || "Chat banned",
+      permanent,
+      expiresAt: permanent ? undefined : new Date(Date.now() + durationSeconds * 1000).toISOString(),
+      active: true,
+      metadata: readRecord(payload.metadata) ?? {},
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    getRoomHistory(roomChatBanHistory, appId, roomId).push(ban);
+    emitRoomHistory(appId, roomId, "chat:ban:history", roomChatBanHistory);
+    io.to(roomChannel(appId, roomId)).emit("chat:ban", serializeRoomHistoryRecord(ban));
+    return { ban: serializeRoomHistoryRecord(ban) };
+  });
+}
+
+function likeRoom(socket: Socket) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    const userId = participant.externalUserId ?? participant.userId;
+    const likes = getRoomLikeUsers(appId, roomId);
+
+    likes.add(userId);
+    const updated = ensureRoom(appId, roomId, { likeCount: likes.size });
+    io.to(roomChannel(appId, roomId)).emit("room:like", {
+      room: serializeRoom(updated),
+      likeCount: updated.likeCount,
+      like_count: updated.likeCount,
+    });
+    return { room: serializeRoom(updated) };
+  });
+}
+
+function shareRoom(socket: Socket, payload: Record<string, unknown>) {
+  withJoinedParticipant(socket, "room:error", ({ appId, roomId, room, participant }) => {
+    const updated = ensureRoom(appId, roomId, { shareCount: room.shareCount + 1 });
+    const event = {
+      room: serializeRoom(updated),
+      shareCount: updated.shareCount,
+      share_count: updated.shareCount,
+      sharedBy: participant.externalUserId ?? participant.userId,
+      shared_by: participant.externalUserId ?? participant.userId,
+      target: readString(payload.target),
+    };
+    io.to(roomChannel(appId, roomId)).emit("room:share", event);
+    return event;
+  });
+}
+
+function setUserBlock(socket: Socket, payload: Record<string, unknown>, active: boolean) {
+  const appId = readString(socket.data.appId) || DEFAULT_CLIENT_APP_ID;
+  const blockerUserId = getSocketUserKey(socket);
+  const blockedUserId = readString(payload.blockedUserId ?? payload.blocked_user_id ?? payload.targetUserId ?? payload.target_user_id);
+
+  if (!blockedUserId) {
+    socket.emit("user:block:error", { error: "blockedUserId is required" });
+    return;
+  }
+
+  const history = getUserBlockHistory(appId, blockerUserId);
+  const existing = history.find((item) => item.blockedUserId === blockedUserId && item.active);
+  const now = new Date().toISOString();
+  const record = existing ?? {
+    id: randomUUID(),
+    appId,
+    blockerUserId,
+    blockedUserId,
+    reason: readString(payload.reason),
+    active,
+    metadata: readRecord(payload.metadata) ?? {},
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  record.active = active;
+  record.reason = readString(payload.reason) || record.reason;
+  record.metadata = readRecord(payload.metadata) ?? record.metadata;
+  record.updatedAt = now;
+
+  if (!existing) {
+    history.push(record);
+  }
+
+  socket.emit("user:block:updated", serializeUserBlockRecord(record));
+}
+
 function readSecuritySeverity(value: unknown): SecurityIncident["severity"] | null {
   const severity = readString(value).toLowerCase();
 
@@ -2269,6 +3368,324 @@ function readYoutubePlaybackState(value: unknown): YoutubeRoomState["playbackSta
   return null;
 }
 
+function getRoomMessages(appId: string, roomId: string) {
+  const key = scopedKey(appId, roomId);
+
+  if (!roomMessages.has(key)) {
+    roomMessages.set(key, []);
+  }
+
+  return roomMessages.get(key)!;
+}
+
+function getRoomGifts(appId: string, roomId: string) {
+  const key = scopedKey(appId, roomId);
+
+  if (!roomGifts.has(key)) {
+    roomGifts.set(key, []);
+  }
+
+  return roomGifts.get(key)!;
+}
+
+function getRoomHistory(store: Map<string, RoomHistoryRecord[]>, appId: string, roomId: string) {
+  const key = scopedKey(appId, roomId);
+
+  if (!store.has(key)) {
+    store.set(key, []);
+  }
+
+  return store.get(key)!;
+}
+
+function getRoomLikeUsers(appId: string, roomId: string) {
+  const key = scopedKey(appId, roomId);
+
+  if (!roomLikeUsers.has(key)) {
+    roomLikeUsers.set(key, new Set());
+  }
+
+  return roomLikeUsers.get(key)!;
+}
+
+function getUserBlockHistory(appId: string, blockerUserId: string) {
+  const key = scopedKey(appId, blockerUserId);
+
+  if (!userBlockHistory.has(key)) {
+    userBlockHistory.set(key, []);
+  }
+
+  return userBlockHistory.get(key)!;
+}
+
+function findActiveRoomHistoryRecord(
+  store: Map<string, RoomHistoryRecord[]>,
+  appId: string,
+  roomId: string,
+  targetUserId: string,
+) {
+  if (!targetUserId) {
+    return null;
+  }
+
+  const now = Date.now();
+  const record = getRoomHistory(store, appId, roomId).find((item) => {
+    if (!item.active || item.targetUserId !== targetUserId) {
+      return false;
+    }
+
+    if (item.expiresAt && Date.parse(item.expiresAt) <= now) {
+      item.active = false;
+      item.updatedAt = new Date().toISOString();
+      return false;
+    }
+
+    return true;
+  });
+
+  return record ?? null;
+}
+
+function serializeChatMessage(message: ChatMessageRecord) {
+  return {
+    id: message.id,
+    appId: message.appId,
+    app_id: message.appId,
+    roomId: message.roomId,
+    room_id: Number.isFinite(Number(message.roomId)) ? Number(message.roomId) : message.roomId,
+    senderSocketId: message.senderSocketId,
+    sender_socket_id: message.senderSocketId,
+    senderUserId: message.senderUserId,
+    sender_user_id: message.senderUserId,
+    senderExternalUserId: message.senderExternalUserId,
+    sender_external_user_id: message.senderExternalUserId,
+    kind: message.kind,
+    type: message.kind,
+    text: message.text,
+    message: message.text,
+    mediaUrl: message.mediaUrl,
+    media_url: message.mediaUrl,
+    mimeType: message.mimeType,
+    mime_type: message.mimeType,
+    durationSeconds: message.durationSeconds,
+    duration_seconds: message.durationSeconds,
+    replyToMessageId: message.replyToMessageId,
+    reply_to_message_id: message.replyToMessageId,
+    status: message.status,
+    deletedForUserIds: message.deletedForUserIds,
+    deleted_for_user_ids: message.deletedForUserIds,
+    security: message.security,
+    metadata: message.metadata,
+    createdAt: message.createdAt,
+    created_at: message.createdAt,
+    updatedAt: message.updatedAt,
+    updated_at: message.updatedAt,
+  };
+}
+
+function serializeGift(gift: GiftRecord) {
+  return {
+    id: gift.id,
+    appId: gift.appId,
+    app_id: gift.appId,
+    roomId: gift.roomId,
+    room_id: Number.isFinite(Number(gift.roomId)) ? Number(gift.roomId) : gift.roomId,
+    senderSocketId: gift.senderSocketId,
+    sender_socket_id: gift.senderSocketId,
+    senderUserId: gift.senderUserId,
+    sender_user_id: gift.senderUserId,
+    senderExternalUserId: gift.senderExternalUserId,
+    sender_external_user_id: gift.senderExternalUserId,
+    giftId: gift.giftId,
+    gift_id: gift.giftId,
+    name: gift.name,
+    assetUrl: gift.assetUrl,
+    asset_url: gift.assetUrl,
+    assetType: gift.assetType,
+    asset_type: gift.assetType,
+    quantity: gift.quantity,
+    receiverUserId: gift.receiverUserId,
+    receiver_user_id: gift.receiverUserId,
+    metadata: gift.metadata,
+    createdAt: gift.createdAt,
+    created_at: gift.createdAt,
+  };
+}
+
+function serializeRoomHistoryRecord(record: RoomHistoryRecord) {
+  return {
+    id: record.id,
+    appId: record.appId,
+    app_id: record.appId,
+    roomId: record.roomId,
+    room_id: Number.isFinite(Number(record.roomId)) ? Number(record.roomId) : record.roomId,
+    targetUserId: record.targetUserId,
+    target_user_id: record.targetUserId,
+    targetSocketId: record.targetSocketId,
+    target_socket_id: record.targetSocketId,
+    actorUserId: record.actorUserId,
+    actor_user_id: record.actorUserId,
+    reason: record.reason,
+    permanent: record.permanent,
+    expiresAt: record.expiresAt,
+    expires_at: record.expiresAt,
+    active: record.active,
+    metadata: record.metadata,
+    createdAt: record.createdAt,
+    created_at: record.createdAt,
+    updatedAt: record.updatedAt,
+    updated_at: record.updatedAt,
+  };
+}
+
+function serializeUserBlockRecord(record: UserBlockRecord) {
+  return {
+    id: record.id,
+    appId: record.appId,
+    app_id: record.appId,
+    blockerUserId: record.blockerUserId,
+    blocker_user_id: record.blockerUserId,
+    blockedUserId: record.blockedUserId,
+    blocked_user_id: record.blockedUserId,
+    reason: record.reason,
+    active: record.active,
+    metadata: record.metadata,
+    createdAt: record.createdAt,
+    created_at: record.createdAt,
+    updatedAt: record.updatedAt,
+    updated_at: record.updatedAt,
+  };
+}
+
+function emitRoomUpdated(appId: string, roomId: string, room: RoomRecord, eventName: string) {
+  io.to(roomChannel(appId, roomId)).emit(eventName, serializeRoom(room));
+  io.to(roomChannel(appId, roomId)).emit("room:updated", serializeRoom(room));
+  io.to(roomChannel(appId, roomId)).emit("room:state", getRoomState(appId, roomId));
+}
+
+function emitRoomHistory(
+  appId: string,
+  roomId: string,
+  eventName: string,
+  store: Map<string, RoomHistoryRecord[]>,
+) {
+  io.to(roomChannel(appId, roomId)).emit(eventName, {
+    history: getRoomHistory(store, appId, roomId).map(serializeRoomHistoryRecord),
+  });
+}
+
+function canManageRoom(participant: ParticipantState, room: RoomRecord) {
+  const userId = participant.externalUserId ?? participant.userId;
+
+  return participant.permissions.includes("moderate")
+    || participant.role === "owner"
+    || participant.role === "super_admin"
+    || participant.role === "admin"
+    || room.createdBy === userId
+    || room.superAdmins.includes(userId)
+    || room.admins.includes(userId);
+}
+
+function canManageRoomByIdentity(room: RoomRecord, userId: string, role: string | undefined) {
+  return role === "owner"
+    || role === "super_admin"
+    || role === "admin"
+    || room.createdBy === userId
+    || room.superAdmins.includes(userId)
+    || room.admins.includes(userId);
+}
+
+function findParticipant(participants: Map<string, ParticipantState>, payload: Record<string, unknown>) {
+  const targetSocketId = readString(payload.targetSocketId ?? payload.target_socket_id ?? payload.socketId ?? payload.socket_id);
+  const targetUserId = readString(payload.targetUserId ?? payload.target_user_id ?? payload.userId ?? payload.user_id);
+
+  if (targetSocketId && participants.has(targetSocketId)) {
+    return participants.get(targetSocketId);
+  }
+
+  if (!targetUserId) {
+    return null;
+  }
+
+  return Array.from(participants.values()).find(
+    (participant) => participant.userId === targetUserId || participant.externalUserId === targetUserId,
+  ) ?? null;
+}
+
+function getSocketUserKey(socket: Socket) {
+  return readString(socket.data.externalUserId) || readString(socket.data.userId) || socket.id;
+}
+
+function readMessageKind(value: unknown): ChatMessageKind {
+  const kind = readString(value).toLowerCase();
+
+  if (kind === "comment" || kind === "voice" || kind === "image") {
+    return kind;
+  }
+
+  return "message";
+}
+
+function normalizeGiftAssetType(value: unknown) {
+  const raw = readString(value).toLowerCase();
+  const extension = raw.includes(".")
+    ? raw.split(/[?#]/)[0].split(".").pop() ?? ""
+    : raw;
+  const normalized = extension === "jpeg" ? "jpg" : extension;
+  const allowed = new Set(["svga", "svg", "png", "jpg", "webp", "gif", "json", "lottie"]);
+  return allowed.has(normalized) ? normalized : "";
+}
+
+function isAllowedImageMedia(mediaUrl: string, mimeType: string) {
+  if (mimeType.startsWith("image/")) {
+    return true;
+  }
+
+  return Boolean(normalizeGiftAssetType(mediaUrl));
+}
+
+function isAllowedVoiceMedia(mediaUrl: string, mimeType: string) {
+  if (mimeType.startsWith("audio/")) {
+    return true;
+  }
+
+  const extension = mediaUrl.split(/[?#]/)[0].split(".").pop()?.toLowerCase() ?? "";
+  return ["aac", "m4a", "mp3", "ogg", "opus", "wav", "webm"].includes(extension);
+}
+
+function readBoundedNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numberValue = typeof value === "number" ? value : Number(readString(value));
+
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(numberValue)));
+}
+
+function readAnnouncement(value: unknown, createdBy: string): RoomAnnouncement | undefined {
+  const record = readRecord(value);
+  const text = record ? readString(record.text ?? record.message ?? record.announcement) : readString(value);
+
+  if (!text) {
+    return undefined;
+  }
+
+  return {
+    id: record ? readString(record.id) || randomUUID() : randomUUID(),
+    text,
+    pinned: record ? readBoolean(record.pinned, true) : true,
+    createdBy,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function trimRecords<T>(records: T[], max: number) {
+  if (records.length > max) {
+    records.splice(0, records.length - max);
+  }
+}
+
 function readNonNegativeNumber(value: unknown, fallback: number) {
   const numberValue = typeof value === "number" ? value : Number(readString(value));
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : fallback;
@@ -2282,6 +3699,11 @@ function getRoomState(appId: string, roomId: string) {
     room: serializeRoom(room),
     participants,
     participantCount: participants.length,
+    participant_count: participants.length,
+    recentMessages: getRoomMessages(appId, roomId).slice(-50).map(serializeChatMessage),
+    recent_messages: getRoomMessages(appId, roomId).slice(-50).map(serializeChatMessage),
+    recentGifts: getRoomGifts(appId, roomId).slice(-50).map(serializeGift),
+    recent_gifts: getRoomGifts(appId, roomId).slice(-50).map(serializeGift),
   };
 }
 
@@ -2292,6 +3714,8 @@ function serializeRoom(room: RoomRecord) {
     id: room.id,
     room_id: Number.isFinite(Number(room.id)) ? Number(room.id) : room.id,
     name: room.name,
+    profilePictureUrl: room.profilePictureUrl,
+    profile_picture_url: room.profilePictureUrl,
     roomType: room.roomType,
     room_type: room.roomType,
     privacyType: room.privacyType,
@@ -2302,6 +3726,21 @@ function serializeRoom(room: RoomRecord) {
     max_mic_count: room.maxMicCount,
     chatEnabled: room.chatEnabled,
     chat_enabled: room.chatEnabled,
+    joinEnabled: room.joinEnabled,
+    join_enabled: room.joinEnabled,
+    entryNotificationsEnabled: room.entryNotificationsEnabled,
+    entry_notifications_enabled: room.entryNotificationsEnabled,
+    passwordProtected: Boolean(room.password),
+    password_protected: Boolean(room.password),
+    theme: room.theme,
+    announcement: room.announcement,
+    superAdmins: room.superAdmins,
+    super_admins: room.superAdmins,
+    admins: room.admins,
+    likeCount: room.likeCount,
+    like_count: room.likeCount,
+    shareCount: room.shareCount,
+    share_count: room.shareCount,
     metadata: room.metadata,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt,
