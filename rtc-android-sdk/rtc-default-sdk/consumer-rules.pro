@@ -1,0 +1,3 @@
+-keep class com.rtcone.sdk.** { *; }
+-keep class io.socket.** { *; }
+-keep class org.webrtc.** { *; }

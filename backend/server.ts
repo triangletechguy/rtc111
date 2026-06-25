@@ -8,6 +8,7 @@ const app = express();
 app.use(express.json());
 
 const PORT = Number(process.env.PORT ?? 4000);
+const HOST = process.env.HOST ?? "0.0.0.0";
 const RTC_TOKEN_ISSUER = "rtc-platform";
 const RTC_TOKEN_SECRET = process.env.RTC_TOKEN_SECRET ?? "rtc-dev-secret-change-me";
 const RTC_TOKEN_EXPIRES_IN: SignOptions["expiresIn"] = "1h";
@@ -674,8 +675,9 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`RTC Server running on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`RTC Server running on http://${HOST}:${PORT}`);
+  console.log(`Open backend status at http://localhost:${PORT}`);
 });
 
 function requireClientAuth(req: Request, res: Response, next: NextFunction) {

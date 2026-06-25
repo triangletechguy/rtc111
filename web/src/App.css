@@ -10,65 +10,16 @@
 }
 
 .admin-dashboard {
-  width: min(860px, 100%);
+  width: min(760px, 100%);
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
-.dashboard-header,
 .token-panel,
 .token-output,
-.token-copy-row,
-.endpoint-row,
-.status {
+.token-copy-row {
   display: flex;
   align-items: center;
-}
-
-.dashboard-header {
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.brand {
-  margin: 0 0 6px;
-  color: #2a6f67;
-  font-size: 0.78rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0;
-  color: #101820;
-  font-size: clamp(2.4rem, 8vw, 5.4rem);
-  line-height: 0.95;
-  letter-spacing: 0;
-}
-
-.status {
-  min-width: 148px;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border: 1px solid #d6dce5;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #46515c;
-  font-size: 0.9rem;
-  font-weight: 800;
-  box-shadow: 0 10px 30px rgba(21, 34, 50, 0.08);
-}
-
-.status span {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #a9b2bd;
-}
-
-.status.ready span {
-  background: #2a9d8f;
 }
 
 .token-panel,
@@ -135,19 +86,8 @@ button:disabled {
   background: #a9b2bd;
 }
 
-.notice {
-  margin: 0;
-  padding: 12px 14px;
-  border-left: 4px solid #e76f51;
-  border-radius: 6px;
-  background: #fff3ee;
-  color: #7d2f1b;
-  font-weight: 800;
-}
-
 .token-output {
-  display: grid;
-  gap: 16px;
+  display: block;
 }
 
 .token-copy-row {
@@ -155,8 +95,7 @@ button:disabled {
   gap: 12px;
 }
 
-.token-copy-row code,
-.endpoint-row code {
+.token-copy-row code {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #314150;
@@ -171,62 +110,14 @@ button:disabled {
   background: #264653;
 }
 
-.token-meta {
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.token-meta div {
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid #e4e9ef;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.token-meta dt {
-  margin: 0 0 4px;
-  color: #52606c;
-  font-size: 0.75rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.token-meta dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: #172026;
-  font-weight: 800;
-}
-
-.endpoint-row {
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 44px;
-  padding: 0 12px;
-  border-radius: 6px;
-  background: #eef2f7;
-}
-
-.endpoint-row span {
-  color: #52606c;
-  font-size: 0.8rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
 @media (max-width: 760px) {
   .app-shell {
     padding: 18px;
     place-items: start stretch;
   }
 
-  .dashboard-header,
   .token-panel,
-  .token-copy-row,
-  .endpoint-row {
+  .token-copy-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -235,13 +126,8 @@ button:disabled {
     display: flex;
   }
 
-  .status,
   .token-panel button,
   .token-copy-row button {
     width: 100%;
-  }
-
-  .token-meta {
-    grid-template-columns: 1fr;
   }
 }

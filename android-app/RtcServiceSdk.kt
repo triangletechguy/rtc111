@@ -34,15 +34,18 @@ class RtcServiceSdk(
 ) {
 
     data class Config(
-    val signalingUrl: String,
-    val accessToken: String,
-    val roomId: String,
-    val enableAudio: Boolean = true,
-    val enableVideo: Boolean = true,
-    val videoWidth: Int = 1280,
-    val videoHeight: Int = 720,
-    val videoFps: Int = 30
-)
+        val signalingUrl: String,
+        val accessToken: String,
+        val roomId: String,
+        val enableAudio: Boolean = true,
+        val enableVideo: Boolean = true,
+        val videoWidth: Int = 1280,
+        val videoHeight: Int = 720,
+        val videoFps: Int = 30,
+        val iceServers: List<PeerConnection.IceServer> = listOf(
+            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+        )
+    )
 
     interface Listener {
         fun onConnected(socketId: String) {}
@@ -102,21 +105,21 @@ class RtcServiceSdk(
     }
 
     fun connect() {
-    if (config.accessToken.isBlank()) {
-        listener.onError("Access token must be provided by host app code (not UI)")
-        return
-    }
+        if (config.accessToken.isBlank()) {
+            listener.onError("Access token must be provided by host app code (not UI)")
+            return
+        }
 
-    val options = IO.Options().apply {
-        auth = mapOf("token" to config.accessToken)
-        transports = arrayOf("websocket", "polling")
-    }
+        val options = IO.Options().apply {
+            auth = mapOf("token" to config.accessToken)
+            transports = arrayOf("websocket", "polling")
+        }
 
-    socket = IO.socket(config.signalingUrl, options).also { socket ->
-        bindSocketEvents(socket)
-        socket.connect()
+        socket = IO.socket(config.signalingUrl, options).also { socket ->
+            bindSocketEvents(socket)
+            socket.connect()
+        }
     }
-}
 
     fun joinRoom(roomId: String = config.roomId) {
         if (roomId.isBlank()) {
@@ -465,9 +468,9 @@ class RtcServiceSdk(
         closePeerConnection()
         remotePeerId = peerId
 
-        val config = PeerConnection.RTCConfiguration(config.iceServers)
+        val rtcConfiguration = PeerConnection.RTCConfiguration(config.iceServers)
         val connection = getPeerConnectionFactory().createPeerConnection(
-            config,
+            rtcConfiguration,
             object : PeerConnection.Observer {
                 override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {}
