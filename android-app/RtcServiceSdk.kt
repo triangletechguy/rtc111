@@ -11,7 +11,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
+import org.webrtc.Camera1Enumerator
 import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraEnumerator
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
@@ -31,7 +33,10 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
+import org.webrtc.audio.AudioDeviceModule
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.charset.Charset
 import java.util.Locale
 import java.util.UUID
@@ -56,8 +61,8 @@ class RtcServiceSdk(
         val iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         ),
-        val appId: String? = null,
-        val appKey: String? = null
+        val appId: String? = RtcServiceSdk.DEFAULT_APP_ID,
+        val appKey: String? = RtcServiceSdk.DEFAULT_APP_KEY
     ) {
         init {
             RtcServiceSdk.validateProjectCredentials(accessToken, appId, appKey)
@@ -187,8 +192,8 @@ class RtcServiceSdk(
                     enableNoiseCancellation = enableAudio,
                     rtcMode = tokenInfo.rtcMode ?: if (enableVideo) "video" else "voice",
                     iceServers = iceServers,
-                    appId = appId,
-                    appKey = appKey
+                    appId = appId ?: RtcServiceSdk.DEFAULT_APP_ID,
+                    appKey = appKey ?: RtcServiceSdk.DEFAULT_APP_KEY
                 )
             }
         }
@@ -374,14 +379,24 @@ class RtcServiceSdk(
     private val pendingIceCandidatesByPeer = mutableMapOf<String, MutableList<IceCandidate>>()
     private val peerConnections = mutableMapOf<String, PeerConnection>()
     private val remoteVideoTracks = mutableSetOf<VideoTrack>()
+    private val videoCaptureFormats = listOf(
+        VideoCaptureFormat(1280, 720, 30),
+        VideoCaptureFormat(960, 540, 30),
+        VideoCaptureFormat(640, 480, 30),
+        VideoCaptureFormat(640, 360, 30),
+        VideoCaptureFormat(320, 240, 15)
+    )
 
     private var socket: Socket? = null
+    private var audioDeviceModule: AudioDeviceModule? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localStream: MediaStream? = null
     private var remotePeerId: String? = null
     private var localRenderer: SurfaceViewRenderer? = null
     private var remoteRenderer: SurfaceViewRenderer? = null
+    private var localVideoSink: VideoSink? = null
+    private var remoteVideoSink: VideoSink? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoCapturer: VideoCapturer? = null
     private var videoSource: VideoSource? = null
@@ -408,6 +423,12 @@ class RtcServiceSdk(
         val track: VideoTrack
     )
 
+    private data class VideoCaptureFormat(
+        val width: Int,
+        val height: Int,
+        val fps: Int
+    )
+
     fun attachRenderers(
         localRenderer: SurfaceViewRenderer?,
         remoteRenderer: SurfaceViewRenderer?,
@@ -428,14 +449,14 @@ class RtcServiceSdk(
             return
         }
 
-        previousRenderer?.let { videoTrack?.removeSink(it) }
+        previousRenderer?.let { detachLocalVideoSink(it) }
         localRenderer = renderer
 
         renderer?.let {
             if (initializeRenderer) {
                 it.init(eglBase.eglBaseContext, null)
             }
-            videoTrack?.addSink(it)
+            attachLocalVideoSink(it)
         }
     }
 
@@ -457,7 +478,33 @@ class RtcServiceSdk(
             if (initializeRenderer) {
                 rendererView.init(eglBase.eglBaseContext, null)
             }
-            remoteVideoTracks.forEach { track -> track.addSink(rendererView) }
+            attachRemoteVideoSink(rendererView)
+        }
+    }
+
+    fun attachLocalVideoSink(sink: VideoSink?) {
+        val previousSink = localVideoSink
+
+        if (previousSink === sink) {
+            return
+        }
+
+        previousSink?.let { videoTrack?.removeSink(it) }
+        localVideoSink = sink
+        sink?.let { videoTrack?.addSink(it) }
+    }
+
+    fun attachRemoteVideoSink(sink: VideoSink?) {
+        val previousSink = remoteVideoSink
+
+        if (previousSink === sink) {
+            return
+        }
+
+        previousSink?.let { removeRemoteVideoSink(it) }
+        remoteVideoSink = sink
+        sink?.let { nextSink ->
+            remoteVideoTracks.forEach { track -> track.addSink(nextSink) }
         }
     }
 
@@ -476,7 +523,7 @@ class RtcServiceSdk(
             return
         }
 
-        videoTrack?.removeSink(renderer)
+        detachLocalVideoSink(renderer)
         localRenderer = null
 
         if (releaseRenderer) {
@@ -499,6 +546,24 @@ class RtcServiceSdk(
         if (releaseRenderer) {
             renderer.release()
         }
+    }
+
+    fun detachLocalVideoSink(sink: VideoSink) {
+        if (localVideoSink !== sink) {
+            return
+        }
+
+        videoTrack?.removeSink(sink)
+        localVideoSink = null
+    }
+
+    fun detachRemoteVideoSink(sink: VideoSink) {
+        if (remoteVideoSink !== sink) {
+            return
+        }
+
+        removeRemoteVideoSink(sink)
+        remoteVideoSink = null
     }
 
     fun accessTokenInfo(): AccessTokenInfo {
@@ -579,6 +644,10 @@ class RtcServiceSdk(
     fun connectAndJoin(roomId: String = config.roomId) {
         if (roomId.isBlank()) {
             listener.onRoomError("Room id is required")
+            return
+        }
+
+        if (!ensureLocalMediaStarted()) {
             return
         }
 
@@ -709,11 +778,24 @@ class RtcServiceSdk(
         val stream = factory.createLocalMediaStream("local-${UUID.randomUUID()}")
 
         if (config.enableAudio) {
-            stream.addTrack(createLocalAudioTrack(factory))
+            val audio = try {
+                createLocalAudioTrack(factory)
+            } catch (error: Exception) {
+                listener.onError(error.message ?: "Unable to start microphone capture")
+                return false
+            }
+            stream.addTrack(audio)
         }
 
         if (config.enableVideo && cameraEnabled) {
-            createLocalVideoTrack(factory)?.let { stream.addTrack(it) }
+            val video = createLocalVideoTrack(factory)
+
+            if (video == null) {
+                listener.onError("Unable to start camera capture")
+                return false
+            }
+
+            stream.addTrack(video)
         }
 
         localStream = stream
@@ -739,6 +821,7 @@ class RtcServiceSdk(
     fun muteLocalAudio(muted: Boolean) {
         micEnabled = !muted
         audioTrack?.setEnabled(micEnabled)
+        audioDeviceModule?.setMicrophoneMute(muted)
         emitMediaState()
         listener.onLocalAudioMuted(muted)
     }
@@ -764,13 +847,22 @@ class RtcServiceSdk(
 
         if (enabled && videoTrack == null) {
             val factory = getPeerConnectionFactory()
-            createLocalVideoTrack(factory)?.let { track ->
+            val track = createLocalVideoTrack(factory)
+
+            if (track == null) {
+                cameraEnabled = false
+                emitMediaState()
+                listener.onLocalVideoEnabled(false)
+                return
+            }
+
+            track.let {
                 val stream = localStream
 
                 if (stream != null) {
-                    stream.addTrack(track)
+                    stream.addTrack(it)
                     peerConnections.values.forEach { connection ->
-                        connection.addTrack(track, listOf(stream.id))
+                        connection.addTrack(it, listOf(stream.id))
                     }
                     peerConnections.keys.toList().forEach { createOffer(it) }
                 }
@@ -991,11 +1083,7 @@ class RtcServiceSdk(
 
     fun setSpeakerphoneOn(enabled: Boolean) {
         speakerEnabled = enabled
-
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager?.isSpeakerphoneOn = enabled
-
+        configureAudioForCall()
         emitMediaState()
         listener.onSpeakerphoneChanged(enabled)
     }
@@ -1400,6 +1488,9 @@ class RtcServiceSdk(
         videoCapturer = null
 
         detachRenderers(releaseRenderers = true)
+        localVideoSink?.let { detachLocalVideoSink(it) }
+        remoteVideoSink?.let { detachRemoteVideoSink(it) }
+
         videoTrack?.dispose()
         videoTrack = null
 
@@ -1420,6 +1511,9 @@ class RtcServiceSdk(
 
         peerConnectionFactory?.dispose()
         peerConnectionFactory = null
+
+        audioDeviceModule?.release()
+        audioDeviceModule = null
 
         eglBase.release()
     }
@@ -1948,12 +2042,12 @@ class RtcServiceSdk(
 
     private fun attachRemoteVideoTrack(track: VideoTrack) {
         if (remoteVideoTracks.add(track)) {
-            remoteRenderer?.let { track.addSink(it) }
+            remoteVideoSink?.let { track.addSink(it) }
         }
     }
 
-    private fun detachRemoteVideoSink(renderer: SurfaceViewRenderer) {
-        remoteVideoTracks.forEach { track -> track.removeSink(renderer) }
+    private fun removeRemoteVideoSink(sink: VideoSink) {
+        remoteVideoTracks.forEach { track -> track.removeSink(sink) }
     }
 
     private fun flushPendingIceCandidates(peerId: String, connection: PeerConnection) {
@@ -1986,7 +2080,7 @@ class RtcServiceSdk(
 
     private fun closePeerConnection(peerId: String? = null) {
         if (peerId == null) {
-            remoteRenderer?.let { detachRemoteVideoSink(it) }
+            remoteVideoSink?.let { removeRemoteVideoSink(it) }
             remoteVideoTracks.clear()
             peerConnections.values.toList().forEach { connection ->
                 connection.close()
@@ -2015,6 +2109,7 @@ class RtcServiceSdk(
         peerConnectionFactory?.let { return it }
 
         initializePeerConnectionFactory(context)
+        configureAudioForCall()
 
         val encoderFactory = DefaultVideoEncoderFactory(
             eglBase.eglBaseContext,
@@ -2022,8 +2117,10 @@ class RtcServiceSdk(
             true
         )
         val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+        val audioModule = createAudioDeviceModule()
 
         return PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
@@ -2031,25 +2128,80 @@ class RtcServiceSdk(
     }
 
     private fun createCameraCapturer(): VideoCapturer? {
-        val enumerator = Camera2Enumerator(context)
-        val deviceNames = enumerator.deviceNames
-
-        deviceNames
-            .filter { enumerator.isFrontFacing(it) }
-            .forEach { deviceName ->
-                enumerator.createCapturer(deviceName, null)?.let { return it }
+        val enumerators = buildList<CameraEnumerator> {
+            if (Camera2Enumerator.isSupported(context)) {
+                add(Camera2Enumerator(context))
             }
+            add(Camera1Enumerator(false))
+        }
 
-        deviceNames
-            .filterNot { enumerator.isFrontFacing(it) }
-            .forEach { deviceName ->
-                enumerator.createCapturer(deviceName, null)?.let { return it }
-            }
+        enumerators.forEach { enumerator ->
+            val deviceNames = enumerator.deviceNames
 
+            deviceNames
+                .filter { enumerator.isFrontFacing(it) }
+                .forEach { deviceName ->
+                    enumerator.createCapturer(deviceName, null)?.let { return it }
+                }
+
+            deviceNames
+                .filterNot { enumerator.isFrontFacing(it) }
+                .forEach { deviceName ->
+                    enumerator.createCapturer(deviceName, null)?.let { return it }
+                }
+        }
+
+        listener.onError("No Android camera capturer is available")
         return null
     }
 
+    private fun createAudioDeviceModule(): AudioDeviceModule {
+        audioDeviceModule?.let { return it }
+
+        return JavaAudioDeviceModule.builder(context)
+            .setUseHardwareAcousticEchoCanceler(JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported())
+            .setUseHardwareNoiseSuppressor(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
+            .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+                override fun onWebRtcAudioRecordInitError(errorMessage: String) {
+                    listener.onError("Microphone init failed: $errorMessage")
+                }
+
+                override fun onWebRtcAudioRecordStartError(
+                    errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
+                    errorMessage: String
+                ) {
+                    listener.onError("Microphone start failed: $errorMessage")
+                }
+
+                override fun onWebRtcAudioRecordError(errorMessage: String) {
+                    listener.onError("Microphone failed: $errorMessage")
+                }
+            })
+            .setAudioTrackErrorCallback(object : JavaAudioDeviceModule.AudioTrackErrorCallback {
+                override fun onWebRtcAudioTrackInitError(errorMessage: String) {
+                    listener.onError("Speaker init failed: $errorMessage")
+                }
+
+                override fun onWebRtcAudioTrackStartError(
+                    errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode,
+                    errorMessage: String
+                ) {
+                    listener.onError("Speaker start failed: $errorMessage")
+                }
+
+                override fun onWebRtcAudioTrackError(errorMessage: String) {
+                    listener.onError("Speaker failed: $errorMessage")
+                }
+            })
+            .createAudioDeviceModule()
+            .also { audioDeviceModule = it }
+    }
+
     private fun createLocalAudioTrack(factory: PeerConnectionFactory): AudioTrack {
+        configureAudioForCall()
+        audioDeviceModule?.setMicrophoneMute(!micEnabled)
+        audioDeviceModule?.setSpeakerMute(false)
+
         val source = factory.createAudioSource(createAudioConstraints())
         val track = factory.createAudioTrack("audio-${UUID.randomUUID()}", source)
 
@@ -2143,29 +2295,51 @@ class RtcServiceSdk(
     private fun createLocalVideoTrack(factory: PeerConnectionFactory): VideoTrack? {
         videoTrack?.let { return it }
 
-        val capturer = createCameraCapturer()
+        val captureFormats = buildList {
+            add(VideoCaptureFormat(config.videoWidth, config.videoHeight, config.videoFps))
+            videoCaptureFormats.forEach { format ->
+                if (none { it == format }) {
+                    add(format)
+                }
+            }
+        }
+        var lastError: String? = null
+        var capturedTrack: CapturedVideoTrack? = null
 
-        if (capturer == null) {
-            listener.onError("No camera capturer is available")
+        for (format in captureFormats) {
+            val capturer = createCameraCapturer() ?: return null
+            val nextTrack = createCapturedVideoTrack(
+                factory = factory,
+                capturer = capturer,
+                width = format.width,
+                height = format.height,
+                fps = format.fps,
+                reportErrors = false
+            )
+
+            if (nextTrack != null) {
+                capturedTrack = nextTrack
+                break
+            }
+
+            lastError = "Camera failed at ${format.width}x${format.height}@${format.fps}"
+        }
+
+        val readyTrack = capturedTrack
+
+        if (readyTrack == null) {
+            listener.onError(lastError ?: "Unable to start camera capture")
             return null
         }
 
-        val capturedTrack = createCapturedVideoTrack(
-            factory = factory,
-            capturer = capturer,
-            width = config.videoWidth,
-            height = config.videoHeight,
-            fps = config.videoFps
-        ) ?: return null
+        videoCapturer = readyTrack.capturer
+        surfaceTextureHelper = readyTrack.textureHelper
+        videoSource = readyTrack.source
 
-        videoCapturer = capturedTrack.capturer
-        surfaceTextureHelper = capturedTrack.textureHelper
-        videoSource = capturedTrack.source
-
-        return capturedTrack.track.also { track ->
+        return readyTrack.track.also { track ->
             videoTrack = track
             track.setEnabled(cameraEnabled)
-            localRenderer?.let { track.addSink(it) }
+            localVideoSink?.let { track.addSink(it) }
         }
     }
 
@@ -2186,10 +2360,10 @@ class RtcServiceSdk(
         val nextTrack = capturedTrack.track
 
         nextTrack.setEnabled(cameraEnabled)
-        localRenderer?.let { nextTrack.addSink(it) }
+        localVideoSink?.let { nextTrack.addSink(it) }
 
         oldTrack?.let { track ->
-            localRenderer?.let { track.removeSink(it) }
+            localVideoSink?.let { track.removeSink(it) }
             stream.removeTrack(track)
         }
         stream.addTrack(nextTrack)
@@ -2241,7 +2415,8 @@ class RtcServiceSdk(
         capturer: VideoCapturer,
         width: Int,
         height: Int,
-        fps: Int
+        fps: Int,
+        reportErrors: Boolean = true
     ): CapturedVideoTrack? {
         val textureHelper = SurfaceTextureHelper.create(
             if (capturer.isScreencast) "RtcServiceScreenCaptureThread" else "RtcServiceCameraCaptureThread",
@@ -2253,7 +2428,9 @@ class RtcServiceSdk(
             capturer.initialize(textureHelper, context, source.capturerObserver)
             capturer.startCapture(width, height, fps)
         } catch (error: Exception) {
-            listener.onError(error.message ?: "Unable to start video capture")
+            if (reportErrors) {
+                listener.onError(error.message ?: "Unable to start video capture at ${width}x${height}@${fps}")
+            }
             disposeCapturedVideo(capturer, source, textureHelper, null)
             return null
         }
@@ -2285,6 +2462,13 @@ class RtcServiceSdk(
         textureHelper?.dispose()
     }
 
+    private fun configureAudioForCall() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager.isSpeakerphoneOn = speakerEnabled
+    }
+
     private fun updateConnectionIndicator(indicator: ConnectionIndicator) {
         if (connectionIndicator == indicator) {
             return
@@ -2303,6 +2487,8 @@ class RtcServiceSdk(
 
     companion object {
         const val DEFAULT_SIGNALING_URL = "https://funint.online"
+        const val DEFAULT_APP_ID = "test000"
+        const val DEFAULT_APP_KEY = "rtc_app_47e10be169ed47b88166aef86510dab6"
 
         @Volatile
         private var factoryInitialized = false

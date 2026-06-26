@@ -86,6 +86,12 @@ export async function verifyClient({
   });
 }
 
+export async function getRtcHealth({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+} = {}) {
+  return requestJson(`${apiUrl}/health`);
+}
+
 export async function getAdminBilling({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   adminKey = RTC_DEFAULT_ADMIN_KEY,
@@ -137,8 +143,14 @@ export async function createAdminApp({
   adminKey = RTC_DEFAULT_ADMIN_KEY,
   name,
   packageName,
+  bundleId,
+  environment = "development",
+  region = "global",
+  platforms = [],
+  enabledFeatures = [],
+  webhookUrl,
   allowedOrigins = [],
-  keyLabel = "Default API key",
+  keyLabel = "Default App Secret",
   metadata = {},
 } = {}) {
   return requestJson(`${apiUrl}/admin/apps`, {
@@ -147,6 +159,12 @@ export async function createAdminApp({
     body: {
       name,
       package_name: packageName,
+      bundle_id: bundleId,
+      environment,
+      region,
+      platforms,
+      enabled_features: enabledFeatures,
+      webhook_url: webhookUrl,
       allowed_origins: allowedOrigins,
       key_label: keyLabel,
       metadata,
@@ -158,7 +176,7 @@ export async function createAdminAppKey({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   adminKey = RTC_DEFAULT_ADMIN_KEY,
   appId,
-  label = "Backend API key",
+  label = "Rotated App Secret",
 } = {}) {
   if (!appId) {
     throw new Error("appId is required");
@@ -2046,21 +2064,48 @@ function getAdminHeaders(adminKey) {
 }
 
 async function requestJson(url, { method = "GET", headers = {}, body } = {}) {
-  const response = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...headers,
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  let response;
+
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (error) {
+    throw new Error(
+      `Unable to reach RTC API at ${getUrlOrigin(url)}. Start the backend or set VITE_SIGNALING_URL. ${getErrorMessage(error)}`,
+    );
+  }
 
   if (!response.ok) {
-    const message = await response.text();
+    const message = await readErrorResponse(response);
     throw new Error(message || `Request failed with ${response.status}`);
   }
 
   return response.json();
+}
+
+async function readErrorResponse(response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    return payload?.error ?? payload?.message ?? JSON.stringify(payload);
+  }
+
+  return response.text();
+}
+
+function getUrlOrigin(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
 }
 
 function normalizeSignal(signal) {

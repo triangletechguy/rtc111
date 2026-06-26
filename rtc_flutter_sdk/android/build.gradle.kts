@@ -77,5 +77,8 @@ kotlin {
 
 dependencies {
     implementation("com.rtcone:rtc-default-sdk:0.1.0")
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude(group = "org.json", module = "json")
+    }
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

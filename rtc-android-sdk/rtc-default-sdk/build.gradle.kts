@@ -53,14 +53,14 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     api("io.github.webrtc-sdk:android:144.7559.09")
-    implementation("io.socket:socket.io-client:2.1.2") {
+    api("io.socket:socket.io-client:2.1.2") {
         exclude(group = "org.json", module = "json")
     }
 }
 
 val bundleSelfContainedReleaseAar by tasks.registering {
     group = "build"
-    description = "Builds an integration-safe release AAR with WebRTC/Socket.IO jars and native libs; OkHttp/Okio stay external."
+    description = "Builds an integration-safe release AAR with WebRTC jars/native libs; Socket.IO, Engine.IO, OkHttp, and Okio stay external."
 
     dependsOn("bundleReleaseAar")
 
@@ -92,12 +92,7 @@ val bundleSelfContainedReleaseAar by tasks.registering {
         runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
             val group = artifact.moduleVersion.id.group
 
-            if (
-                group == "org.jetbrains.kotlin" ||
-                group == "org.jetbrains" ||
-                group == "com.squareup.okhttp3" ||
-                group == "com.squareup.okio"
-            ) {
+            if (group !in setOf("io.github.webrtc-sdk")) {
                 return@forEach
             }
 

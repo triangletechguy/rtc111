@@ -107,13 +107,15 @@ class RtcFlutterSdk {
   static const String defaultSignalingUrl = 'https://funint.online';
   static const String localVideoViewType =
       'com.rtcone.sdk/rtc_flutter_sdk/local_video_view';
+  static const String remoteVideoViewType =
+      'com.rtcone.sdk/rtc_flutter_sdk/remote_video_view';
   static const String defaultAppId = String.fromEnvironment(
     'RTC_APP_ID',
-    defaultValue: 'local-rtc-client',
+    defaultValue: 'test000',
   );
   static const String defaultAppKey = String.fromEnvironment(
     'RTC_APP_KEY',
-    defaultValue: 'rtc-dev-app-key',
+    defaultValue: 'rtc_app_47e10be169ed47b88166aef86510dab6',
   );
   static const String defaultAccessToken = String.fromEnvironment(
     'RTC_ACCESS_TOKEN',
@@ -286,6 +288,31 @@ class RtcLocalVideoView extends StatelessWidget {
 
     return AndroidView(
       viewType: RtcFlutterSdk.localVideoViewType,
+      layoutDirection: TextDirection.ltr,
+      creationParams: <String, Object?>{'mirror': mirror, 'fit': fit.name},
+      creationParamsCodec: const StandardMessageCodec(),
+    );
+  }
+}
+
+class RtcRemoteVideoView extends StatelessWidget {
+  const RtcRemoteVideoView({
+    super.key,
+    this.mirror = false,
+    this.fit = RtcVideoViewFit.cover,
+  });
+
+  final bool mirror;
+  final RtcVideoViewFit fit;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const SizedBox.shrink();
+    }
+
+    return AndroidView(
+      viewType: RtcFlutterSdk.remoteVideoViewType,
       layoutDirection: TextDirection.ltr,
       creationParams: <String, Object?>{'mirror': mirror, 'fit': fit.name},
       creationParamsCodec: const StandardMessageCodec(),

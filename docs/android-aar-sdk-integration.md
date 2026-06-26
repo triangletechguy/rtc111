@@ -31,6 +31,8 @@ rtc-android-sdk/rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-c
 
 Use `rtc-default-sdk-release-self-contained.aar` when distributing the SDK to an app team. The repository root `rtc-default-sdk-release.aar` is also copied from that integration-safe build.
 
+The integration-safe AAR bundles the WebRTC classes and native libraries, but keeps Socket.IO, Engine.IO, OkHttp, and Okio as normal Gradle dependencies. This avoids duplicate-class failures in apps that already resolve `socket.io-client` or `engine.io-client`.
+
 The SDK package exposed by the AAR is:
 
 ```kotlin
@@ -48,7 +50,7 @@ Copy the release AAR into the client Android app:
 app/libs/rtc-default-sdk-release.aar
 ```
 
-In the client app module Gradle file, add the local AAR and OkHttp. The release AAR embeds WebRTC, Socket.IO, Engine.IO, and WebRTC native libraries. It deliberately does not embed OkHttp or Okio because many Android apps already include Okio through Firebase, DataStore, gRPC, or other plugins; embedding those common classes causes duplicate-class build failures.
+In the client app module Gradle file, add the local AAR, Socket.IO, and OkHttp. The release AAR embeds WebRTC and WebRTC native libraries. It deliberately does not embed Socket.IO, Engine.IO, OkHttp, or Okio because many Android and Flutter apps already include those modules through other plugins; embedding them causes duplicate-class build failures such as `Duplicate class io.socket.engineio... found in modules engine.io-client-2.1.0 and rtc-update.aar`.
 
 Kotlin DSL:
 
@@ -63,6 +65,9 @@ android {
 
 dependencies {
     implementation(files("libs/rtc-default-sdk-release.aar"))
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude(group = "org.json", module = "json")
+    }
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 ```
@@ -80,6 +85,9 @@ android {
 
 dependencies {
     implementation files("libs/rtc-default-sdk-release.aar")
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude group: "org.json", module: "json"
+    }
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
 }
 ```
@@ -396,7 +404,9 @@ If the user leaves the room but stays on the screen, call `leaveRoom()`. If the 
 - `Connect before joining a room`: call `connectAndJoin()` or wait for `onConnected()` before calling `joinRoom()`.
 - `Video is disabled in this SDK config`: the SDK was created with an audio-only config. Use `RtcServiceSdk.Config.videoCall(...)` for camera or screen share.
 - No remote video: confirm both users joined the same room, both tokens include `signal`, and publishers include `publish_video` for video rooms.
-- Duplicate Okio/OkHttp classes: use the current integration-safe AAR. It should contain `libs/android-*.jar`, `libs/socket.io-client-*.jar`, and `libs/engine.io-client-*.jar`, but not `libs/okhttp-*.jar` or `libs/okio-*.jar`.
+- Duplicate Socket.IO/Engine.IO classes: use the current integration-safe AAR. It should contain `libs/android-*.jar`, but not `libs/socket.io-client-*.jar` or `libs/engine.io-client-*.jar`. Then keep only normal Gradle dependencies for `io.socket:socket.io-client`.
+- Duplicate Okio/OkHttp classes: use the current integration-safe AAR. It should not contain `libs/okhttp-*.jar` or `libs/okio-*.jar`.
+- Build cannot find `io.socket.*` classes: add `implementation("io.socket:socket.io-client:2.1.2")` in the app module.
 - Build cannot find `okhttp3.*` classes: add `implementation("com.squareup.okhttp3:okhttp:4.12.0")` in the app module.
 
 ## Related Docs

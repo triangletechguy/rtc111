@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import http from "http";
 import jwt, { type JwtPayload, type SignOptions } from "jsonwebtoken";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { Server, type Socket } from "socket.io";
 
 const app = express();
@@ -15,6 +15,9 @@ const RTC_TOKEN_EXPIRES_IN: SignOptions["expiresIn"] = "1h";
 const RTC_API_KEY = process.env.RTC_API_KEY ?? "rtc-dev-api-key";
 const RTC_APP_KEY = process.env.RTC_APP_KEY ?? "rtc-dev-app-key";
 const RTC_ADMIN_KEY = process.env.RTC_ADMIN_KEY ?? "rtc-admin-dev-key";
+const RTC_TEST000_APP_ID = process.env.RTC_TEST000_APP_ID ?? "test000";
+const RTC_TEST000_APP_KEY = process.env.RTC_TEST000_APP_KEY ?? "rtc-test000-dev-app-key";
+const RTC_TEST000_APP_SECRET = process.env.RTC_TEST000_APP_SECRET ?? "rtc-test000-dev-app-secret";
 const DEFAULT_ROOM_CAPACITY = Number(process.env.RTC_DEFAULT_ROOM_CAPACITY ?? 8);
 const parsedBillingRate = Number(process.env.RTC_BILLING_RATE_PER_MINUTE ?? 0);
 const RTC_BILLING_RATE_PER_MINUTE =
@@ -47,8 +50,17 @@ type ClientApp = {
   id: string;
   appKey: string;
   name: string;
+  environment: string;
+  region: string;
+  platforms: string[];
+  enabledFeatures: string[];
+  status: string;
   packageName?: string;
+  bundleId?: string;
+  webhookUrl?: string;
   allowedOrigins: string[];
+  usageLimits: Record<string, unknown>;
+  securitySettings: Record<string, unknown>;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -58,6 +70,7 @@ type StoredApiKey = {
   id: string;
   appId: string;
   secret: string;
+  secretHash: string;
   label: string;
   createdAt: string;
   lastUsedAt?: string;
@@ -281,6 +294,7 @@ type StoredRtcToken = {
   rtcMode: string;
   permissions: RtcPermission[];
   issuedAt: string;
+  appSecretId?: string;
   expiresAt?: string;
   revokedAt?: string;
   lastUsedAt?: string;
@@ -320,6 +334,7 @@ const issuedRtcTokens = new Map<string, StoredRtcToken>();
 let nextRoomId = 1;
 
 bootstrapDefaultClientApp();
+bootstrapConfiguredClientApp();
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -466,27 +481,53 @@ app.post("/admin/apps", requireAdminAuth, (req, res) => {
 
   const requestedAppId = readString(req.body?.app_id) || readString(req.body?.appId);
   const packageName = readString(req.body?.package_name) || readString(req.body?.packageName);
+  const bundleId = readString(req.body?.bundle_id) || readString(req.body?.bundleId);
+  const environment = readString(req.body?.environment) || "development";
+  const region = readString(req.body?.region) || "global";
+  const appType = readString(req.body?.app_type) || readString(req.body?.appType);
   const allowedOrigins = readStringArray(req.body?.allowed_origins ?? req.body?.allowedOrigins);
-  const metadata = readRecord(req.body?.metadata) ?? {};
-  const keyLabel = readString(req.body?.key_label) || readString(req.body?.keyLabel) || "Default API key";
+  const requestedPlatforms = readStringArray(req.body?.platforms);
+  const requestedFeatures = readStringArray(req.body?.enabled_features ?? req.body?.enabledFeatures);
+  const webhookUrl = readString(req.body?.webhook_url) || readString(req.body?.webhookUrl);
+  const usageLimits = readRecord(req.body?.usage_limits ?? req.body?.usageLimits) ?? defaultUsageLimits();
+  const securitySettings = readRecord(req.body?.security_settings ?? req.body?.securitySettings) ?? defaultSecuritySettings();
+  const metadata = {
+    ...(readRecord(req.body?.metadata) ?? {}),
+    ...(appType ? { appType } : {}),
+  };
+  const keyLabel = readString(req.body?.key_label) || readString(req.body?.keyLabel) || "Production App Secret";
   const appId = createUniqueAppId(requestedAppId || name);
   const { app: clientApp, apiKey } = createClientApp({
     id: appId,
     name,
+    environment,
+    region,
+    platforms: requestedPlatforms.length > 0 ? requestedPlatforms : inferPlatforms({ packageName, bundleId }),
+    enabledFeatures: requestedFeatures.length > 0 ? requestedFeatures : defaultEnabledFeatures(appType),
     packageName,
+    bundleId,
+    webhookUrl,
     allowedOrigins,
+    usageLimits,
+    securitySettings,
     metadata,
     keyLabel,
   });
   const serializedApp = serializeClientApp(clientApp);
   const serializedServerKey = serializeApiKey(apiKey, true);
+  const publicBaseUrl = getPublicBaseUrl(req);
 
   res.status(201).json({
+    project: serializedApp,
     app: serializedApp,
+    projectId: clientApp.id,
+    project_id: clientApp.id,
     appId: clientApp.id,
     app_id: clientApp.id,
     appKey: clientApp.appKey,
     app_key: clientApp.appKey,
+    appSecret: apiKey.secret,
+    app_secret: apiKey.secret,
     apiKey: serializedServerKey,
     api_key: apiKey.secret,
     serverKey: serializedServerKey,
@@ -494,12 +535,16 @@ app.post("/admin/apps", requireAdminAuth, (req, res) => {
     serverSecret: apiKey.secret,
     server_secret: apiKey.secret,
     integration: {
-      apiBaseUrl: `http://localhost:${PORT}`,
-      api_base_url: `http://localhost:${PORT}`,
+      apiBaseUrl: publicBaseUrl,
+      api_base_url: publicBaseUrl,
+      projectId: clientApp.id,
+      project_id: clientApp.id,
       appId: clientApp.id,
       app_id: clientApp.id,
       appKey: clientApp.appKey,
       app_key: clientApp.appKey,
+      appSecret: apiKey.secret,
+      app_secret: apiKey.secret,
       authorizationHeader: `Bearer ${apiKey.secret}`,
       authorization_header: `Bearer ${apiKey.secret}`,
       serverAuthorizationHeader: `Bearer ${apiKey.secret}`,
@@ -583,11 +628,13 @@ app.post("/admin/apps/:appId/keys", requireAdminAuth, (req, res) => {
 
   const apiKey = createApiKey({
     appId,
-    label: readString(req.body?.label) || readString(req.body?.key_label) || "API key",
+    label: readString(req.body?.label) || readString(req.body?.key_label) || "Rotated App Secret",
   });
 
   res.status(201).json({
     app: serializeClientApp(clientApp),
+    appSecret: apiKey.secret,
+    app_secret: apiKey.secret,
     apiKey: serializeApiKey(apiKey, true),
     api_key: apiKey.secret,
     serverKey: serializeApiKey(apiKey, true),
@@ -603,7 +650,7 @@ app.post("/admin/apps/:appId/keys/:keyId/revoke", requireAdminAuth, (req, res) =
   const apiKey = findApiKeyById(appId, keyId);
 
   if (!apiKey) {
-    res.status(404).json({ revoked: false, error: "API key not found" });
+    res.status(404).json({ revoked: false, error: "App Secret not found" });
     return;
   }
 
@@ -621,10 +668,20 @@ app.post("/rtc-token", (req, res) => {
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtcMode) || readString(req.body?.rtc_mode) || "video";
   const permissions = readPermissions(req.body?.permissions, defaultPermissionsForRtcMode(rtcMode));
+  const defaultAppSecret = getPrimaryAppSecret(DEFAULT_CLIENT_APP_ID);
 
   ensureRoomForRtcMode(DEFAULT_CLIENT_APP_ID, roomId, rtcMode);
 
-  res.json(issueToken({ appId: DEFAULT_CLIENT_APP_ID, roomId, userId, role, rtcMode, permissions }));
+  res.json(issueToken({
+    appId: DEFAULT_CLIENT_APP_ID,
+    appSecretId: defaultAppSecret?.id,
+    signingSecret: defaultAppSecret?.secret,
+    roomId,
+    userId,
+    role,
+    rtcMode,
+    permissions,
+  }));
 });
 
 app.get("/client/me", requireClientAuth, (req, res) => {
@@ -641,6 +698,7 @@ app.get("/client/me", requireClientAuth, (req, res) => {
       "rooms.create",
       "rooms.state",
       "project.credentials",
+      "project.app_secret",
       "rtc.token",
       "rtc.session.start",
       "rtc.session.end",
@@ -767,6 +825,7 @@ app.get("/client/rooms/:roomId", requireClientAuth, (req, res) => {
 
 app.post("/client/rtc/token", requireClientAuth, (req, res) => {
   const clientApp = getClientApp(req);
+  const clientSecret = (req as ClientAuthedRequest).clientApiKey;
   const requestedAppId =
     readString(req.body?.app_id) ||
     readString(req.body?.appId) ||
@@ -806,6 +865,8 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
 
   res.json(issueToken({
     appId: clientApp.id,
+    appSecretId: clientSecret?.id,
+    signingSecret: clientSecret?.secret,
     ...(roomId ? { roomId } : {}),
     userId: externalUserId,
     externalUserId,
@@ -817,6 +878,7 @@ app.post("/client/rtc/token", requireClientAuth, (req, res) => {
 
 app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
   const clientApp = getClientApp(req);
+  const clientSecret = (req as ClientAuthedRequest).clientApiKey;
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId);
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
 
@@ -863,6 +925,8 @@ app.post("/client/rtc/session/start", requireClientAuth, (req, res) => {
     session,
     ...issueToken({
       appId: clientApp.id,
+      appSecretId: clientSecret?.id,
+      signingSecret: clientSecret?.secret,
       roomId,
       userId: externalUserId,
       externalUserId,
@@ -1798,8 +1862,8 @@ function requireClientAuth(req: Request, res: Response, next: NextFunction) {
 
   if (!apiKey || apiKey.revokedAt) {
     res.status(401).json({
-      error: "Valid client API key is required",
-      hint: "Set Authorization: Bearer <client_api_key>. The local dev default is rtc-dev-api-key.",
+      error: "Valid RTC project App Secret is required",
+      hint: "Set Authorization: Bearer <app_secret> on your backend only. Do not ship this secret in a mobile/web client.",
     });
     return;
   }
@@ -1808,7 +1872,7 @@ function requireClientAuth(req: Request, res: Response, next: NextFunction) {
 
   if (!clientApp) {
     res.status(401).json({
-      error: "Client app for this API key was not found",
+      error: "RTC project for this App Secret was not found",
     });
     return;
   }
@@ -1832,11 +1896,75 @@ function bootstrapDefaultClientApp() {
     id: DEFAULT_CLIENT_APP_ID,
     appKey: RTC_APP_KEY,
     name: "RTC Platform Client",
+    environment: "development",
+    region: "global",
+    platforms: ["web", "android", "ios"],
+    enabledFeatures: defaultEnabledFeatures("voice_video_chat"),
     packageName: "local.dev",
     allowedOrigins: ["*"],
+    usageLimits: defaultUsageLimits(),
+    securitySettings: defaultSecuritySettings(),
     metadata: { environment: "development" },
-    keyLabel: "Local development API key",
+    keyLabel: "Local development App Secret",
     apiKey: RTC_API_KEY,
+  });
+}
+
+function bootstrapConfiguredClientApp() {
+  const configuredAppId =
+    readString(process.env.RTC_CLIENT_APP_ID) ||
+    RTC_TEST000_APP_ID;
+  const configuredAppKey =
+    readString(process.env.RTC_CLIENT_APP_KEY) ||
+    RTC_TEST000_APP_KEY;
+  const configuredAppSecret =
+    readString(process.env.RTC_CLIENT_APP_SECRET) ||
+    RTC_TEST000_APP_SECRET;
+
+  if (!configuredAppId && !configuredAppKey && !configuredAppSecret) {
+    return;
+  }
+
+  if (!configuredAppId || !configuredAppKey || !configuredAppSecret) {
+    console.warn(
+      "Skipping configured RTC client app bootstrap: RTC_CLIENT_APP_ID, RTC_CLIENT_APP_KEY, and RTC_CLIENT_APP_SECRET are all required.",
+    );
+    return;
+  }
+
+  const existingApp = clientApps.get(configuredAppId);
+
+  if (existingApp) {
+    existingApp.appKey = configuredAppKey;
+    existingApp.updatedAt = new Date().toISOString();
+
+    if (!apiKeysBySecret.has(configuredAppSecret)) {
+      createApiKey({
+        appId: configuredAppId,
+        label: readString(process.env.RTC_CLIENT_APP_SECRET_LABEL) || "Configured App Secret",
+        secret: configuredAppSecret,
+      });
+    }
+
+    return;
+  }
+
+  createClientApp({
+    id: configuredAppId,
+    appKey: configuredAppKey,
+    name: readString(process.env.RTC_CLIENT_APP_NAME) || configuredAppId,
+    environment: readString(process.env.RTC_CLIENT_APP_ENVIRONMENT) || "production",
+    region: "global",
+    platforms: ["android", "ios", "web"],
+    enabledFeatures: defaultEnabledFeatures("voice_video_chat"),
+    packageName: readString(process.env.RTC_CLIENT_APP_PACKAGE_NAME) || "com.example.hapi",
+    bundleId: readString(process.env.RTC_CLIENT_APP_BUNDLE_ID),
+    allowedOrigins: ["*"],
+    usageLimits: defaultUsageLimits(),
+    securitySettings: defaultSecuritySettings(),
+    metadata: { source: "environment" },
+    keyLabel: readString(process.env.RTC_CLIENT_APP_SECRET_LABEL) || "Configured App Secret",
+    apiKey: configuredAppSecret,
   });
 }
 
@@ -1844,16 +1972,32 @@ function createClientApp({
   id,
   appKey,
   name,
+  environment = "development",
+  region = "global",
+  platforms = ["android", "ios", "web"],
+  enabledFeatures = defaultEnabledFeatures(),
   packageName,
+  bundleId,
+  webhookUrl,
   allowedOrigins = [],
+  usageLimits = defaultUsageLimits(),
+  securitySettings = defaultSecuritySettings(),
   metadata = {},
-  keyLabel = "Default API key",
+  keyLabel = "Default App Secret",
   apiKey,
 }: {
   id: string;
   name: string;
+  environment?: string;
+  region?: string;
+  platforms?: string[];
+  enabledFeatures?: string[];
   packageName?: string;
+  bundleId?: string;
+  webhookUrl?: string;
   allowedOrigins?: string[];
+  usageLimits?: Record<string, unknown>;
+  securitySettings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   keyLabel?: string;
   apiKey?: string;
@@ -1864,8 +2008,17 @@ function createClientApp({
     id,
     appKey: appKey || createRtcAppKey(),
     name,
+    environment,
+    region,
+    platforms,
+    enabledFeatures,
+    status: "active",
     ...(packageName ? { packageName } : {}),
+    ...(bundleId ? { bundleId } : {}),
+    ...(webhookUrl ? { webhookUrl } : {}),
     allowedOrigins,
+    usageLimits,
+    securitySettings,
     metadata,
     createdAt: now,
     updatedAt: now,
@@ -1895,9 +2048,14 @@ function createApiKey({
     id: `key_${randomUUID()}`,
     appId,
     secret: secret || createClientApiKeySecret(),
+    secretHash: hashSecret(secret || ""),
     label,
     createdAt: new Date().toISOString(),
   };
+
+  if (!secret) {
+    keyRecord.secretHash = hashSecret(keyRecord.secret);
+  }
 
   apiKeysBySecret.set(keyRecord.secret, keyRecord);
   return keyRecord;
@@ -1906,6 +2064,12 @@ function createApiKey({
 function findApiKeyById(appId: string, keyId: string) {
   return Array.from(apiKeysBySecret.values()).find(
     (apiKey) => apiKey.appId === appId && apiKey.id === keyId,
+  );
+}
+
+function getPrimaryAppSecret(appId: string) {
+  return Array.from(apiKeysBySecret.values()).find(
+    (apiKey) => apiKey.appId === appId && !apiKey.revokedAt,
   );
 }
 
@@ -1994,15 +2158,83 @@ function deleteMapEntriesByScopedPrefix<K extends string, V>(store: Map<K, V>, s
 }
 
 function createClientApiKeySecret() {
-  return `rtc_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`;
+  return `rtc_secret_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`;
 }
 
 function createRtcAppKey() {
-  return `app_${randomUUID().replace(/-/g, "")}`;
+  return `rtc_app_${randomUUID().replace(/-/g, "")}`;
+}
+
+function hashSecret(secret: string) {
+  return createHash("sha256").update(secret).digest("hex");
+}
+
+function inferPlatforms({ packageName, bundleId }: { packageName?: string; bundleId?: string }) {
+  return [
+    ...(packageName ? ["android"] : []),
+    ...(bundleId ? ["ios"] : []),
+  ].length > 0
+    ? [
+      ...(packageName ? ["android"] : []),
+      ...(bundleId ? ["ios"] : []),
+    ]
+    : ["android", "ios", "web"];
+}
+
+function defaultEnabledFeatures(appType = "") {
+  const normalized = normalizeRtcMode(appType || "voice_video_chat");
+
+  if (isAudioOnlyRtcMode(normalized)) {
+    return ["voice", "chat", "noise_cancellation", "ai_moderation"];
+  }
+
+  return [
+    "voice",
+    "video",
+    "chat",
+    "screen_share",
+    "beauty_filter",
+    "noise_cancellation",
+    "ai_moderation",
+    "gifts",
+  ];
+}
+
+function defaultUsageLimits(): Record<string, unknown> {
+  return {
+    maxParticipantsPerRoom: DEFAULT_ROOM_CAPACITY,
+    maxMicCount: DEFAULT_ROOM_CAPACITY,
+    monthlyMinuteLimit: null,
+  };
+}
+
+function defaultSecuritySettings(): Record<string, unknown> {
+  return {
+    tokenRequired: true,
+    appSecretRequiredForTokenIssuance: true,
+    allowedOriginsEnforced: false,
+  };
+}
+
+function getPublicBaseUrl(req: Request) {
+  const configuredUrl = readString(process.env.RTC_PUBLIC_BASE_URL);
+
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/g, "");
+  }
+
+  const forwardedProto = readString(req.header("x-forwarded-proto"));
+  const forwardedHost = readString(req.header("x-forwarded-host"));
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = forwardedHost || req.header("host") || `localhost:${PORT}`;
+
+  return `${protocol}://${host}`;
 }
 
 function issueToken({
   appId,
+  appSecretId,
+  signingSecret,
   roomId,
   userId,
   externalUserId,
@@ -2011,6 +2243,8 @@ function issueToken({
   permissions,
 }: {
   appId: string;
+  appSecretId?: string;
+  signingSecret?: string;
   roomId?: string;
   userId: string;
   externalUserId?: string;
@@ -2020,6 +2254,11 @@ function issueToken({
 }) {
   const tokenId = randomUUID();
   const appKey = clientApps.get(appId)?.appKey;
+  const appSecret = signingSecret || getPrimaryAppSecret(appId)?.secret;
+
+  if (!appSecret) {
+    throw new Error("RTC project App Secret is required to issue a token");
+  }
 
   const payload: RtcAccessToken = {
     scope: "rtc",
@@ -2033,7 +2272,7 @@ function issueToken({
     permissions,
   };
 
-  const token = jwt.sign(payload, RTC_TOKEN_SECRET, {
+  const token = jwt.sign(payload, appSecret, {
     expiresIn: RTC_TOKEN_EXPIRES_IN,
     issuer: RTC_TOKEN_ISSUER,
     subject: userId,
@@ -2060,6 +2299,7 @@ function issueToken({
     rtcMode,
     permissions,
     issuedAt,
+    ...(appSecretId ? { appSecretId } : {}),
     expiresAt,
   };
 
@@ -2073,6 +2313,8 @@ function issueToken({
     token_id: tokenId,
     tokenType: "Bearer",
     token_type: "Bearer",
+    appSecretId,
+    app_secret_id: appSecretId,
     expiresIn: RTC_TOKEN_EXPIRES_IN,
     expires_in: RTC_TOKEN_EXPIRES_IN,
     expiresAt,
@@ -2114,7 +2356,19 @@ function verifyRtcToken(token: string) {
     throw new Error("RTC token is expired");
   }
 
-  const decoded = jwt.verify(token, RTC_TOKEN_SECRET, {
+  const appSecret = storedToken.appSecretId
+    ? findApiKeyById(storedToken.appId, storedToken.appSecretId)
+    : getPrimaryAppSecret(storedToken.appId);
+
+  if (!appSecret) {
+    throw new Error("RTC token App Secret was not found");
+  }
+
+  if (appSecret.revokedAt) {
+    throw new Error("RTC token App Secret was revoked");
+  }
+
+  const decoded = jwt.verify(token, appSecret.secret, {
     issuer: RTC_TOKEN_ISSUER,
   }) as RtcAccessToken;
 
@@ -2234,6 +2488,8 @@ function serializeStoredToken(storedToken: StoredRtcToken) {
     rtcMode: storedToken.rtcMode,
     rtc_mode: storedToken.rtcMode,
     permissions: storedToken.permissions,
+    appSecretId: storedToken.appSecretId,
+    app_secret_id: storedToken.appSecretId,
     issuedAt: storedToken.issuedAt,
     issued_at: storedToken.issuedAt,
     expiresAt: storedToken.expiresAt,
@@ -2249,15 +2505,33 @@ function serializeStoredToken(storedToken: StoredRtcToken) {
 function serializeClientApp(clientApp: ClientApp) {
   return {
     id: clientApp.id,
+    projectId: clientApp.id,
+    project_id: clientApp.id,
     appId: clientApp.id,
     app_id: clientApp.id,
     appKey: clientApp.appKey,
     app_key: clientApp.appKey,
     name: clientApp.name,
+    projectName: clientApp.name,
+    project_name: clientApp.name,
+    environment: clientApp.environment,
+    region: clientApp.region,
+    platforms: clientApp.platforms,
+    enabledFeatures: clientApp.enabledFeatures,
+    enabled_features: clientApp.enabledFeatures,
+    status: clientApp.status,
     packageName: clientApp.packageName,
     package_name: clientApp.packageName,
+    bundleId: clientApp.bundleId,
+    bundle_id: clientApp.bundleId,
+    webhookUrl: clientApp.webhookUrl,
+    webhook_url: clientApp.webhookUrl,
     allowedOrigins: clientApp.allowedOrigins,
     allowed_origins: clientApp.allowedOrigins,
+    usageLimits: clientApp.usageLimits,
+    usage_limits: clientApp.usageLimits,
+    securitySettings: clientApp.securitySettings,
+    security_settings: clientApp.securitySettings,
     metadata: clientApp.metadata,
     createdAt: clientApp.createdAt,
     created_at: clientApp.createdAt,
@@ -2269,16 +2543,25 @@ function serializeClientApp(clientApp: ClientApp) {
 function serializeApiKey(apiKey: StoredApiKey, includeSecret = false) {
   return {
     id: apiKey.id,
+    appSecretId: apiKey.id,
+    app_secret_id: apiKey.id,
     keyId: apiKey.id,
     key_id: apiKey.id,
     appId: apiKey.appId,
     app_id: apiKey.appId,
     label: apiKey.label,
+    type: "app_secret",
+    secretType: "app_secret",
+    secret_type: "app_secret",
+    appSecretPreview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
+    app_secret_preview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
     keyPreview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
     key_preview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
     ...(includeSecret
       ? {
         secret: apiKey.secret,
+        appSecret: apiKey.secret,
+        app_secret: apiKey.secret,
         apiKey: apiKey.secret,
         api_key: apiKey.secret,
         clientApiKey: apiKey.secret,

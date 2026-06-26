@@ -21,7 +21,17 @@ rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release.aar
 rtc-default-sdk/build/outputs/aar/rtc-default-sdk-release-self-contained.aar
 ```
 
-Use the self-contained AAR for file-based app integration. It embeds WebRTC, Socket.IO, Engine.IO, and WebRTC native libraries so the host app does not need separate WebRTC or Socket.IO dependency declarations. The host app should still declare OkHttp, for example `implementation("com.squareup.okhttp3:okhttp:4.12.0")`; OkHttp and Okio are not embedded to avoid duplicate-class failures in Firebase/Flutter apps.
+Use the self-contained AAR for file-based app integration. It embeds WebRTC and WebRTC native libraries, but keeps Socket.IO, Engine.IO, OkHttp, and Okio external to avoid duplicate-class failures in Firebase/Flutter apps and apps that already use Socket.IO.
+
+Host apps should declare:
+
+```kotlin
+implementation(files("libs/rtc-default-sdk-release.aar"))
+implementation("io.socket:socket.io-client:2.1.2") {
+    exclude(group = "org.json", module = "json")
+}
+implementation("com.squareup.okhttp3:okhttp:4.12.0")
+```
 
 ## Runtime Endpoint
 
