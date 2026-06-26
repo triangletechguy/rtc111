@@ -167,10 +167,6 @@ class RtcServiceSdk(
                     ?: tokenInfo.roomId?.takeIf { it.isNotBlank() }
                     ?: throw IllegalArgumentException("Room id is required when the RTC token does not include roomId")
 
-                if (tokenInfo.isExpired()) {
-                    throw IllegalArgumentException("RTC access token is expired")
-                }
-
                 val enableVideo = RtcServiceSdk.shouldEnableVideo(tokenInfo)
                 val enableAudio = RtcServiceSdk.shouldEnableAudio(tokenInfo)
 
