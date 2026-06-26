@@ -4,17 +4,25 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import com.rtcone.sdk.RtcDashboardSession
+import com.rtcone.sdk.RtcServiceSdk
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import io.flutter.plugin.common.StandardMessageCodec
+import io.flutter.plugin.platform.PlatformView
+import io.flutter.plugin.platform.PlatformViewFactory
 import java.util.Locale
 import org.webrtc.MediaStream
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 
 class RtcFlutterSdkPlugin :
     FlutterPlugin,
@@ -23,6 +31,7 @@ class RtcFlutterSdkPlugin :
     PluginRegistry.RequestPermissionsResultListener {
 
     private val channelName = "com.rtcone.sdk/rtc_flutter_sdk"
+    private val localVideoViewType = "com.rtcone.sdk/rtc_flutter_sdk/local_video_view"
     private val permissionRequestCode = 57041
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -33,11 +42,17 @@ class RtcFlutterSdkPlugin :
     private var activityBinding: ActivityPluginBinding? = null
     private var session: RtcDashboardSession? = null
     private var pendingStart: PendingStart? = null
+    private var localVideoViewFactory: RtcLocalVideoViewFactory? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, channelName)
         channel.setMethodCallHandler(this)
+
+        localVideoViewFactory = RtcLocalVideoViewFactory { session?.rawSdk() }
+            .also { factory ->
+                binding.platformViewRegistry.registerViewFactory(localVideoViewType, factory)
+            }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -258,6 +273,7 @@ class RtcFlutterSdkPlugin :
 
             session = nextSession
             nextSession.setSpeakerphoneOn(start.speakerOn)
+            localVideoViewFactory?.attachToSession(nextSession.rawSdk())
             start.result.success(
                 mapOf(
                     "started" to true,
@@ -341,6 +357,7 @@ class RtcFlutterSdkPlugin :
     }
 
     private fun releaseSession() {
+        localVideoViewFactory?.detachFromSession(releaseRenderer = true)
         session?.leaveRoom()
         session?.release()
         session = null
@@ -413,4 +430,98 @@ class RtcFlutterSdkPlugin :
 
 private fun RtcDashboardSession.Companion.rawDefaultSignalingUrl(): String {
     return com.rtcone.sdk.RtcServiceSdk.DEFAULT_SIGNALING_URL
+}
+
+private class RtcLocalVideoViewFactory(
+    private val sdkProvider: () -> RtcServiceSdk?
+) : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
+    private val activeViews = mutableSetOf<RtcLocalVideoPlatformView>()
+
+    override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
+        val creationParams = args as? Map<*, *>
+        return RtcLocalVideoPlatformView(
+            context = context,
+            creationParams = creationParams,
+            onDispose = { activeViews.remove(it) }
+        ).also { view ->
+            activeViews.add(view)
+            view.attachTo(sdkProvider())
+        }
+    }
+
+    fun attachToSession(sdk: RtcServiceSdk?) {
+        activeViews.toList().forEach { view -> view.attachTo(sdk) }
+    }
+
+    fun detachFromSession(releaseRenderer: Boolean) {
+        activeViews.toList().forEach { view ->
+            view.detachFromSdk(releaseRenderer = releaseRenderer)
+        }
+    }
+}
+
+private class RtcLocalVideoPlatformView(
+    context: Context,
+    creationParams: Map<*, *>?,
+    private val onDispose: (RtcLocalVideoPlatformView) -> Unit
+) : PlatformView {
+    private val renderer = SurfaceViewRenderer(context)
+    private var attachedSdk: RtcServiceSdk? = null
+    private var rendererInitialized = false
+
+    init {
+        renderer.setBackgroundColor(Color.BLACK)
+        renderer.setEnableHardwareScaler(true)
+        renderer.setMirror(creationParams.booleanParam("mirror", defaultValue = true))
+        renderer.setScalingType(
+            when (creationParams.stringParam("fit", defaultValue = "cover")) {
+                "contain" -> RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                else -> RendererCommon.ScalingType.SCALE_ASPECT_FILL
+            }
+        )
+    }
+
+    override fun getView(): View = renderer
+
+    fun attachTo(sdk: RtcServiceSdk?) {
+        if (attachedSdk === sdk) {
+            return
+        }
+
+        detachFromSdk(releaseRenderer = true)
+        attachedSdk = sdk
+
+        if (sdk != null) {
+            sdk.attachLocalRenderer(renderer, initializeRenderer = !rendererInitialized)
+            rendererInitialized = true
+        }
+    }
+
+    fun detachFromSdk(releaseRenderer: Boolean = false) {
+        attachedSdk?.detachLocalRenderer(renderer, releaseRenderer = false)
+        attachedSdk = null
+
+        if (releaseRenderer && rendererInitialized) {
+            renderer.release()
+            rendererInitialized = false
+        }
+    }
+
+    override fun dispose() {
+        detachFromSdk(releaseRenderer = true)
+        onDispose(this)
+    }
+}
+
+private fun Map<*, *>?.booleanParam(name: String, defaultValue: Boolean): Boolean {
+    val value = this?.get(name) ?: return defaultValue
+    return when (value) {
+        is Boolean -> value
+        is String -> value.toBooleanStrictOrNull() ?: defaultValue
+        else -> defaultValue
+    }
+}
+
+private fun Map<*, *>?.stringParam(name: String, defaultValue: String): String {
+    return this?.get(name)?.toString()?.takeIf { it.isNotBlank() } ?: defaultValue
 }

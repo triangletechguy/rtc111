@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
 class RtcEvent {
@@ -104,6 +105,8 @@ class RtcFlutterSdk {
   RtcFlutterSdk._();
 
   static const String defaultSignalingUrl = 'https://funint.online';
+  static const String localVideoViewType =
+      'com.rtcone.sdk/rtc_flutter_sdk/local_video_view';
   static const String defaultAppId = String.fromEnvironment(
     'RTC_APP_ID',
     defaultValue: 'local-rtc-client',
@@ -260,6 +263,33 @@ class RtcFlutterSdk {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       throw UnsupportedError('RTC Flutter SDK is currently Android-only.');
     }
+  }
+}
+
+enum RtcVideoViewFit { cover, contain }
+
+class RtcLocalVideoView extends StatelessWidget {
+  const RtcLocalVideoView({
+    super.key,
+    this.mirror = true,
+    this.fit = RtcVideoViewFit.cover,
+  });
+
+  final bool mirror;
+  final RtcVideoViewFit fit;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const SizedBox.shrink();
+    }
+
+    return AndroidView(
+      viewType: RtcFlutterSdk.localVideoViewType,
+      layoutDirection: TextDirection.ltr,
+      creationParams: <String, Object?>{'mirror': mirror, 'fit': fit.name},
+      creationParamsCodec: const StandardMessageCodec(),
+    );
   }
 }
 

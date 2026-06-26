@@ -373,6 +373,7 @@ class RtcServiceSdk(
     private val eglBase = EglBase.create()
     private val pendingIceCandidatesByPeer = mutableMapOf<String, MutableList<IceCandidate>>()
     private val peerConnections = mutableMapOf<String, PeerConnection>()
+    private val remoteVideoTracks = mutableSetOf<VideoTrack>()
 
     private var socket: Socket? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -412,15 +413,92 @@ class RtcServiceSdk(
         remoteRenderer: SurfaceViewRenderer?,
         initializeRenderers: Boolean = true
     ) {
-        this.localRenderer = localRenderer
-        this.remoteRenderer = remoteRenderer
+        attachLocalRenderer(localRenderer, initializeRenderers)
+        attachRemoteRenderer(remoteRenderer, initializeRenderers)
+    }
 
-        if (initializeRenderers) {
-            localRenderer?.init(eglBase.eglBaseContext, null)
-            remoteRenderer?.init(eglBase.eglBaseContext, null)
+    @JvmOverloads
+    fun attachLocalRenderer(
+        renderer: SurfaceViewRenderer?,
+        initializeRenderer: Boolean = true
+    ) {
+        val previousRenderer = localRenderer
+
+        if (previousRenderer === renderer) {
+            return
         }
 
-        localRenderer?.let { videoTrack?.addSink(it) }
+        previousRenderer?.let { videoTrack?.removeSink(it) }
+        localRenderer = renderer
+
+        renderer?.let {
+            if (initializeRenderer) {
+                it.init(eglBase.eglBaseContext, null)
+            }
+            videoTrack?.addSink(it)
+        }
+    }
+
+    @JvmOverloads
+    fun attachRemoteRenderer(
+        renderer: SurfaceViewRenderer?,
+        initializeRenderer: Boolean = true
+    ) {
+        val previousRenderer = remoteRenderer
+
+        if (previousRenderer === renderer) {
+            return
+        }
+
+        previousRenderer?.let { detachRemoteVideoSink(it) }
+        remoteRenderer = renderer
+
+        renderer?.let { rendererView ->
+            if (initializeRenderer) {
+                rendererView.init(eglBase.eglBaseContext, null)
+            }
+            remoteVideoTracks.forEach { track -> track.addSink(rendererView) }
+        }
+    }
+
+    @JvmOverloads
+    fun detachRenderers(releaseRenderers: Boolean = false) {
+        localRenderer?.let { detachLocalRenderer(it, releaseRenderers) }
+        remoteRenderer?.let { detachRemoteRenderer(it, releaseRenderers) }
+    }
+
+    @JvmOverloads
+    fun detachLocalRenderer(
+        renderer: SurfaceViewRenderer,
+        releaseRenderer: Boolean = false
+    ) {
+        if (localRenderer !== renderer) {
+            return
+        }
+
+        videoTrack?.removeSink(renderer)
+        localRenderer = null
+
+        if (releaseRenderer) {
+            renderer.release()
+        }
+    }
+
+    @JvmOverloads
+    fun detachRemoteRenderer(
+        renderer: SurfaceViewRenderer,
+        releaseRenderer: Boolean = false
+    ) {
+        if (remoteRenderer !== renderer) {
+            return
+        }
+
+        detachRemoteVideoSink(renderer)
+        remoteRenderer = null
+
+        if (releaseRenderer) {
+            renderer.release()
+        }
     }
 
     fun accessTokenInfo(): AccessTokenInfo {
@@ -1321,7 +1399,7 @@ class RtcServiceSdk(
         videoCapturer?.dispose()
         videoCapturer = null
 
-        localRenderer?.let { videoTrack?.removeSink(it) }
+        detachRenderers(releaseRenderers = true)
         videoTrack?.dispose()
         videoTrack = null
 
@@ -1343,8 +1421,6 @@ class RtcServiceSdk(
         peerConnectionFactory?.dispose()
         peerConnectionFactory = null
 
-        localRenderer?.release()
-        remoteRenderer?.release()
         eglBase.release()
     }
 
@@ -1830,7 +1906,7 @@ class RtcServiceSdk(
                     val track = transceiver?.receiver?.track()
 
                     if (track is VideoTrack) {
-                        remoteRenderer?.let { track.addSink(it) }
+                        attachRemoteVideoTrack(track)
                     }
                 }
 
@@ -1865,11 +1941,19 @@ class RtcServiceSdk(
     }
 
     private fun attachRemoteStream(peerId: String, stream: MediaStream) {
-        remoteRenderer?.let { renderer ->
-            stream.videoTracks.firstOrNull()?.addSink(renderer)
-        }
+        stream.videoTracks.forEach { attachRemoteVideoTrack(it) }
         listener.onRemoteStream(stream)
         listener.onRemoteStreamForPeer(peerId, stream)
+    }
+
+    private fun attachRemoteVideoTrack(track: VideoTrack) {
+        if (remoteVideoTracks.add(track)) {
+            remoteRenderer?.let { track.addSink(it) }
+        }
+    }
+
+    private fun detachRemoteVideoSink(renderer: SurfaceViewRenderer) {
+        remoteVideoTracks.forEach { track -> track.removeSink(renderer) }
     }
 
     private fun flushPendingIceCandidates(peerId: String, connection: PeerConnection) {
@@ -1902,6 +1986,8 @@ class RtcServiceSdk(
 
     private fun closePeerConnection(peerId: String? = null) {
         if (peerId == null) {
+            remoteRenderer?.let { detachRemoteVideoSink(it) }
+            remoteVideoTracks.clear()
             peerConnections.values.toList().forEach { connection ->
                 connection.close()
                 connection.dispose()
