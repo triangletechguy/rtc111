@@ -17,7 +17,10 @@
 .token-panel,
 .usage-summary,
 .token-output,
-.billing-panel {
+.billing-panel,
+.client-app-panel,
+.client-secret-panel,
+.client-apps-panel {
   border: 1px solid #d9e0e8;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.9);
@@ -110,7 +113,7 @@
 .admin-tabs {
   padding: 6px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -148,7 +151,8 @@
 }
 
 .token-stack,
-.package-stack {
+.package-stack,
+.client-keys-stack {
   min-width: 0;
 }
 
@@ -168,7 +172,10 @@
 .token-panel,
 .token-output,
 .billing-panel,
-.usage-summary {
+.usage-summary,
+.client-app-panel,
+.client-secret-panel,
+.client-apps-panel {
   padding: 16px;
 }
 
@@ -189,7 +196,8 @@
   font-weight: 800;
 }
 
-.field-group input {
+.field-group input,
+.inline-input {
   width: 100%;
   min-height: 46px;
   padding: 0 12px;
@@ -200,7 +208,8 @@
   font: inherit;
 }
 
-.field-group input:focus {
+.field-group input:focus,
+.inline-input:focus {
   outline: 3px solid rgba(42, 157, 143, 0.22);
   border-color: #2a9d8f;
 }
@@ -235,6 +244,16 @@ button:disabled {
 }
 
 .secondary-button:disabled {
+  background: #a9b2bd;
+}
+
+.danger-button {
+  min-width: 104px;
+  padding: 0 16px;
+  background: #be123c;
+}
+
+.danger-button:disabled {
   background: #a9b2bd;
 }
 
@@ -292,6 +311,128 @@ button:disabled {
 
 .token-copy-row button:disabled {
   background: #a9b2bd;
+}
+
+.client-app-panel,
+.client-apps-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.client-app-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.create-client-button {
+  width: fit-content;
+  min-width: 220px;
+  padding: 0 18px;
+}
+
+.client-secret-panel {
+  display: grid;
+  gap: 12px;
+  border-color: rgba(42, 157, 143, 0.35);
+  background: #f3fbf8;
+}
+
+.client-secret-panel h3 {
+  margin: 0;
+  color: #172026;
+  font-size: 1.08rem;
+}
+
+.client-secret-panel p {
+  max-width: 720px;
+  margin: 6px 0 0;
+  color: #52606c;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.client-secret-panel > code,
+.client-env-box {
+  overflow-wrap: anywhere;
+  border: 1px solid #bddbd4;
+  border-radius: 6px;
+  background: #fff;
+  color: #173f3a;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+}
+
+.client-secret-panel > code {
+  padding: 12px;
+}
+
+.client-env-box {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.client-env-box code {
+  overflow-wrap: anywhere;
+  color: inherit;
+  font: inherit;
+}
+
+.client-secret-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.client-secret-actions button {
+  min-width: 120px;
+  padding: 0 16px;
+}
+
+.client-apps-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.client-apps-table {
+  min-width: 900px;
+}
+
+.client-apps-table th:nth-child(3),
+.client-apps-table td:nth-child(3),
+.client-apps-table th:nth-child(4),
+.client-apps-table td:nth-child(4) {
+  text-align: left;
+}
+
+.key-preview-list {
+  display: grid;
+  gap: 6px;
+}
+
+.key-preview-list span {
+  margin: 0;
+  color: #52606c;
+  white-space: normal;
+}
+
+.inline-input {
+  min-width: 210px;
+  min-height: 40px;
+  font-size: 0.88rem;
+}
+
+.table-action-button {
+  min-width: 124px;
+  min-height: 40px;
+  padding: 0 12px;
+}
+
+.table-action-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
 }
 
 .token-status,
@@ -419,11 +560,18 @@ td span {
 
   .token-panel button,
   .token-copy-row button,
+  .create-client-button,
+  .client-secret-actions button,
+  .table-action-button,
   .secondary-button {
     width: 100%;
   }
 
   .usage-summary dl {
+    grid-template-columns: 1fr;
+  }
+
+  .client-app-form-grid {
     grid-template-columns: 1fr;
   }
 }

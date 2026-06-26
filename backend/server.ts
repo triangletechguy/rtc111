@@ -505,6 +505,32 @@ app.get("/admin/apps/:appId", requireAdminAuth, (req, res) => {
   });
 });
 
+app.delete("/admin/apps/:appId", requireAdminAuth, (req, res) => {
+  const appId = readString(req.params.appId);
+  const clientApp = clientApps.get(appId);
+
+  if (!clientApp) {
+    res.status(404).json({ deleted: false, error: "Client app not found" });
+    return;
+  }
+
+  if (appId === DEFAULT_CLIENT_APP_ID) {
+    res.status(400).json({
+      deleted: false,
+      error: "The default local development client app cannot be deleted",
+    });
+    return;
+  }
+
+  const deleted = deleteClientApp(appId);
+
+  res.json({
+    deleted: true,
+    app: serializeClientApp(clientApp),
+    ...deleted,
+  });
+});
+
 app.get("/admin/apps/:appId/billing", requireAdminAuth, (req, res) => {
   const appId = readString(req.params.appId);
   const clientApp = clientApps.get(appId);
@@ -1833,6 +1859,90 @@ function findApiKeyById(appId: string, keyId: string) {
   return Array.from(apiKeysBySecret.values()).find(
     (apiKey) => apiKey.appId === appId && apiKey.id === keyId,
   );
+}
+
+function deleteClientApp(appId: string) {
+  const scopedPrefix = `${encodeURIComponent(appId)}:`;
+  const deleted = {
+    apiKeys: 0,
+    users: 0,
+    rooms: 0,
+    sessions: 0,
+    rtcTokens: 0,
+    roomStates: 0,
+    messages: 0,
+    moderationRecords: 0,
+    securityIncidents: 0,
+    sockets: 0,
+  };
+
+  clientApps.delete(appId);
+
+  for (const [secret, apiKey] of apiKeysBySecret.entries()) {
+    if (apiKey.appId === appId) {
+      apiKeysBySecret.delete(secret);
+      deleted.apiKeys += 1;
+    }
+  }
+
+  deleted.users += deleteMapEntriesByScopedPrefix(users, scopedPrefix);
+  deleted.rooms += deleteMapEntriesByScopedPrefix(rooms, scopedPrefix);
+  deleted.roomStates += deleteMapEntriesByScopedPrefix(roomParticipants, scopedPrefix);
+  deleted.roomStates += deleteMapEntriesByScopedPrefix(youtubeRoomStates, scopedPrefix);
+  deleted.roomStates += deleteMapEntriesByScopedPrefix(livePkStates, scopedPrefix);
+  deleted.messages += deleteMapEntriesByScopedPrefix(roomMessages, scopedPrefix);
+  deleted.messages += deleteMapEntriesByScopedPrefix(roomGifts, scopedPrefix);
+  deleted.moderationRecords += deleteMapEntriesByScopedPrefix(roomKickHistory, scopedPrefix);
+  deleted.moderationRecords += deleteMapEntriesByScopedPrefix(roomChatBanHistory, scopedPrefix);
+  deleted.moderationRecords += deleteMapEntriesByScopedPrefix(userBlockHistory, scopedPrefix);
+  deleted.moderationRecords += deleteMapEntriesByScopedPrefix(roomLikeUsers, scopedPrefix);
+
+  for (const [sessionId, session] of sessions.entries()) {
+    if (session.appId === appId) {
+      sessions.delete(sessionId);
+      deleted.sessions += 1;
+    }
+  }
+
+  deleted.sessions += deleteMapEntriesByScopedPrefix(activeSessionByUserRoom, scopedPrefix);
+
+  for (const [token, storedToken] of issuedRtcTokens.entries()) {
+    if (storedToken.appId === appId) {
+      issuedRtcTokens.delete(token);
+      deleted.rtcTokens += 1;
+    }
+  }
+
+  for (let index = securityIncidents.length - 1; index >= 0; index -= 1) {
+    if (securityIncidents[index]?.appId === appId) {
+      securityIncidents.splice(index, 1);
+      deleted.securityIncidents += 1;
+    }
+  }
+
+  for (const socket of io.sockets.sockets.values()) {
+    if (readString(socket.data.appId) === appId) {
+      leaveCurrentRoom(socket, "client_app_deleted", true);
+      socket.emit("room:error", "Client app was deleted");
+      socket.disconnect(true);
+      deleted.sockets += 1;
+    }
+  }
+
+  return deleted;
+}
+
+function deleteMapEntriesByScopedPrefix<K extends string, V>(store: Map<K, V>, scopedPrefix: string) {
+  let deleted = 0;
+
+  for (const key of Array.from(store.keys())) {
+    if (key.startsWith(scopedPrefix)) {
+      store.delete(key);
+      deleted += 1;
+    }
+  }
+
+  return deleted;
 }
 
 function createClientApiKeySecret() {

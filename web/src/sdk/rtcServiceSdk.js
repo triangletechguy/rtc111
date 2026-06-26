@@ -103,6 +103,85 @@ export async function getAdminAppBilling({
   });
 }
 
+export async function getAdminApps({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+} = {}) {
+  return requestJson(`${apiUrl}/admin/apps`, {
+    headers: getAdminHeaders(adminKey),
+  });
+}
+
+export async function getAdminApp({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+  appId,
+} = {}) {
+  if (!appId) {
+    throw new Error("appId is required");
+  }
+
+  return requestJson(`${apiUrl}/admin/apps/${encodeURIComponent(appId)}`, {
+    headers: getAdminHeaders(adminKey),
+  });
+}
+
+export async function createAdminApp({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+  name,
+  packageName,
+  allowedOrigins = [],
+  keyLabel = "Default API key",
+  metadata = {},
+} = {}) {
+  return requestJson(`${apiUrl}/admin/apps`, {
+    method: "POST",
+    headers: getAdminHeaders(adminKey),
+    body: {
+      name,
+      package_name: packageName,
+      allowed_origins: allowedOrigins,
+      key_label: keyLabel,
+      metadata,
+    },
+  });
+}
+
+export async function createAdminAppKey({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+  appId,
+  label = "Backend API key",
+} = {}) {
+  if (!appId) {
+    throw new Error("appId is required");
+  }
+
+  return requestJson(`${apiUrl}/admin/apps/${encodeURIComponent(appId)}/keys`, {
+    method: "POST",
+    headers: getAdminHeaders(adminKey),
+    body: {
+      label,
+    },
+  });
+}
+
+export async function deleteAdminApp({
+  apiUrl = RTC_DEFAULT_SIGNALING_URL,
+  adminKey = RTC_DEFAULT_ADMIN_KEY,
+  appId,
+} = {}) {
+  if (!appId) {
+    throw new Error("appId is required");
+  }
+
+  return requestJson(`${apiUrl}/admin/apps/${encodeURIComponent(appId)}`, {
+    method: "DELETE",
+    headers: getAdminHeaders(adminKey),
+  });
+}
+
 export async function getClientBillingUsage({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   apiKey = RTC_DEFAULT_API_KEY,

@@ -11,19 +11,27 @@ http://funint.online, http://www.funint.online {
 	root * /var/www/rtc-enterprise
 
 	handle /api/* {
-		reverse_proxy 127.0.0.1:8000
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle /client/* {
+		reverse_proxy 127.0.0.1:4000
 	}
 
 	handle /admin/* {
-		reverse_proxy 127.0.0.1:8000
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle /rtc-token {
+		reverse_proxy 127.0.0.1:4000
 	}
 
 	handle /socket.io/* {
-		reverse_proxy 127.0.0.1:8000
+		reverse_proxy 127.0.0.1:4000
 	}
 
 	handle /health {
-		reverse_proxy 127.0.0.1:8000
+		reverse_proxy 127.0.0.1:4000
 	}
 
 	handle /assets/* {

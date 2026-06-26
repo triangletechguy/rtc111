@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { getAdminBilling, issueRtcToken } from "./sdk/rtcServiceSdk";
+import {
+  createAdminApp,
+  createAdminAppKey,
+  deleteAdminApp,
+  getAdminApp,
+  getAdminApps,
+  getAdminBilling,
+  issueRtcToken,
+} from "./sdk/rtcServiceSdk";
 import "./App.css";
 
 const DEFAULT_APP_NAME = "Test-rtc";
+const DEFAULT_CLIENT_APP_NAME = "Hapi App";
+const DEFAULT_CLIENT_PACKAGE_NAME = "com.example.hapi";
 
 export default function App() {
   const [appName, setAppName] = useState(DEFAULT_APP_NAME);
@@ -16,6 +26,18 @@ export default function App() {
   const [isBillingLoading, setIsBillingLoading] = useState(false);
   const [rtcConnectionStatus, setRtcConnectionStatus] = useState("idle");
   const [activeTab, setActiveTab] = useState("token");
+  const [clientApps, setClientApps] = useState([]);
+  const [clientKeyStatus, setClientKeyStatus] = useState("");
+  const [isClientAppsLoading, setIsClientAppsLoading] = useState(false);
+  const [isCreatingClientApp, setIsCreatingClientApp] = useState(false);
+  const [newClientAppName, setNewClientAppName] = useState(DEFAULT_CLIENT_APP_NAME);
+  const [newClientPackageName, setNewClientPackageName] = useState(DEFAULT_CLIENT_PACKAGE_NAME);
+  const [newClientAllowedOrigins, setNewClientAllowedOrigins] = useState("");
+  const [newClientKeyLabel, setNewClientKeyLabel] = useState("Production backend key");
+  const [generatedClientKey, setGeneratedClientKey] = useState(null);
+  const [keyLabelsByApp, setKeyLabelsByApp] = useState({});
+  const [creatingKeyAppId, setCreatingKeyAppId] = useState("");
+  const [deletingAppId, setDeletingAppId] = useState("");
 
   const appId = useMemo(() => toAppId(appName), [appName]);
   const billingTotals = useMemo(() => getBillingTotals(billingRows), [billingRows]);
@@ -25,6 +47,7 @@ export default function App() {
 
   useEffect(() => {
     void loadBilling();
+    void loadClientApps();
   }, []);
 
   async function loadBilling() {
@@ -104,6 +127,200 @@ export default function App() {
     }
   }
 
+  async function loadClientApps() {
+    setIsClientAppsLoading(true);
+    setClientKeyStatus("");
+    setRtcConnectionStatus("connecting");
+
+    try {
+      const response = await getAdminApps();
+      const apps = readClientApps(response);
+      const appsWithKeys = await Promise.all(
+        apps.map(async (app) => {
+          const currentAppId = getClientAppId(app);
+
+          if (!currentAppId) {
+            return {
+              ...app,
+              apiKeys: [],
+            };
+          }
+
+          try {
+            const details = await getAdminApp({ appId: currentAppId });
+
+            return {
+              ...(details.app ?? app),
+              apiKeys: readApiKeys(details),
+            };
+          } catch (event) {
+            console.error(getErrorMessage(event));
+
+            return {
+              ...app,
+              apiKeys: [],
+            };
+          }
+        }),
+      );
+
+      setClientApps(appsWithKeys);
+      setClientKeyStatus(appsWithKeys.length ? "Client apps refreshed." : "No client apps created yet.");
+      setRtcConnectionStatus("online");
+    } catch (event) {
+      const message = getErrorMessage(event);
+
+      console.error(message);
+      setClientKeyStatus(message);
+      setRtcConnectionStatus("offline");
+    } finally {
+      setIsClientAppsLoading(false);
+    }
+  }
+
+  async function handleCreateClientApp(event) {
+    event.preventDefault();
+
+    const name = newClientAppName.trim();
+
+    if (!name) {
+      setClientKeyStatus("Client app name is required.");
+      return;
+    }
+
+    setIsCreatingClientApp(true);
+    setClientKeyStatus("");
+    setRtcConnectionStatus("connecting");
+
+    try {
+      const response = await createAdminApp({
+        name,
+        packageName: newClientPackageName.trim(),
+        allowedOrigins: parseAllowedOrigins(newClientAllowedOrigins),
+        keyLabel: newClientKeyLabel.trim() || "Production backend key",
+      });
+
+      setGeneratedClientKey(readGeneratedClientKey(response));
+      setClientKeyStatus("Client app and backend key created.");
+      setRtcConnectionStatus("online");
+      await loadClientApps();
+    } catch (event) {
+      const message = getErrorMessage(event);
+
+      console.error(message);
+      setGeneratedClientKey(null);
+      setClientKeyStatus(message);
+      setRtcConnectionStatus("offline");
+    } finally {
+      setIsCreatingClientApp(false);
+    }
+  }
+
+  async function handleCreateClientKey(app) {
+    const currentAppId = getClientAppId(app);
+
+    if (!currentAppId) {
+      return;
+    }
+
+    setCreatingKeyAppId(currentAppId);
+    setClientKeyStatus("");
+    setRtcConnectionStatus("connecting");
+
+    try {
+      const response = await createAdminAppKey({
+        appId: currentAppId,
+        label: keyLabelsByApp[currentAppId]?.trim() || "Rotated backend key",
+      });
+
+      setGeneratedClientKey(readGeneratedClientKey(response));
+      setClientKeyStatus("New backend key generated.");
+      setRtcConnectionStatus("online");
+      await loadClientApps();
+    } catch (event) {
+      const message = getErrorMessage(event);
+
+      console.error(message);
+      setClientKeyStatus(message);
+      setRtcConnectionStatus("offline");
+    } finally {
+      setCreatingKeyAppId("");
+    }
+  }
+
+  async function handleDeleteClientApp(app) {
+    const currentAppId = getClientAppId(app);
+    const appNameToDelete = getClientAppName(app);
+
+    if (!currentAppId || isProtectedClientApp(app)) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete "${appNameToDelete}"?\n\nThis removes its client API keys and in-memory RTC state.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAppId(currentAppId);
+    setClientKeyStatus("");
+    setRtcConnectionStatus("connecting");
+
+    try {
+      await deleteAdminApp({ appId: currentAppId });
+      setGeneratedClientKey((key) => (key?.appId === currentAppId ? null : key));
+      setKeyLabelsByApp((labels) => {
+        const nextLabels = { ...labels };
+        delete nextLabels[currentAppId];
+        return nextLabels;
+      });
+      setClientKeyStatus(`${appNameToDelete} deleted.`);
+      setRtcConnectionStatus("online");
+      await loadClientApps();
+      await loadBilling();
+    } catch (event) {
+      const message = getErrorMessage(event);
+
+      console.error(message);
+      setClientKeyStatus(message);
+      setRtcConnectionStatus("offline");
+    } finally {
+      setDeletingAppId("");
+    }
+  }
+
+  async function copyGeneratedClientKey() {
+    if (!generatedClientKey?.secret) {
+      return;
+    }
+
+    try {
+      await writeClipboardText(generatedClientKey.secret);
+      setClientKeyStatus("Client API key copied.");
+    } catch (event) {
+      console.error(getErrorMessage(event));
+      setClientKeyStatus("Copy failed. Select the key text manually.");
+    }
+  }
+
+  async function copyGeneratedEnv() {
+    if (!generatedClientKey?.secret) {
+      return;
+    }
+
+    try {
+      await writeClipboardText(
+        `RTC_API_BASE_URL=https://funint.online\nRTC_CLIENT_API_KEY=${generatedClientKey.secret}`,
+      );
+      setClientKeyStatus("Backend env values copied.");
+    } catch (event) {
+      console.error(getErrorMessage(event));
+      setClientKeyStatus("Copy failed. Select the env text manually.");
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="admin-dashboard" aria-label="RTC admin panel">
@@ -129,6 +346,17 @@ export default function App() {
             onClick={() => setActiveTab("token")}
           >
             Token
+          </button>
+          <button
+            id="client-keys-tab"
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "client-keys"}
+            aria-controls="client-keys-panel"
+            className={activeTab === "client-keys" ? "active" : ""}
+            onClick={() => setActiveTab("client-keys")}
+          >
+            Client Keys
           </button>
           <button
             id="package-tab"
@@ -178,6 +406,190 @@ export default function App() {
               {statusMessage}
             </p>
           </div>
+        </section>
+
+        <section
+          id="client-keys-panel"
+          className="tab-panel client-keys-stack"
+          role="tabpanel"
+          aria-labelledby="client-keys-tab"
+          hidden={activeTab !== "client-keys"}
+        >
+          <form className="client-app-panel" onSubmit={handleCreateClientApp}>
+            <div className="panel-header">
+              <div>
+                <h2>Client App Keys</h2>
+                <p>Create the backend API key a client needs before their server can issue RTC access tokens.</p>
+              </div>
+              <button className="secondary-button" type="button" onClick={loadClientApps} disabled={isClientAppsLoading}>
+                {isClientAppsLoading ? "Refreshing" : "Refresh"}
+              </button>
+            </div>
+
+            <div className="client-app-form-grid">
+              <div className="field-group">
+                <label htmlFor="client-app-name">Client app name</label>
+                <input
+                  id="client-app-name"
+                  value={newClientAppName}
+                  onChange={(event) => setNewClientAppName(event.target.value)}
+                  autoComplete="off"
+                  placeholder="Hapi App"
+                />
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="client-package-name">Android package</label>
+                <input
+                  id="client-package-name"
+                  value={newClientPackageName}
+                  onChange={(event) => setNewClientPackageName(event.target.value)}
+                  autoComplete="off"
+                  placeholder="com.example.hapi"
+                />
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="client-key-label">Key label</label>
+                <input
+                  id="client-key-label"
+                  value={newClientKeyLabel}
+                  onChange={(event) => setNewClientKeyLabel(event.target.value)}
+                  autoComplete="off"
+                  placeholder="Production backend key"
+                />
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="client-allowed-origins">Allowed origins</label>
+                <input
+                  id="client-allowed-origins"
+                  value={newClientAllowedOrigins}
+                  onChange={(event) => setNewClientAllowedOrigins(event.target.value)}
+                  autoComplete="off"
+                  placeholder="https://client.example"
+                />
+              </div>
+            </div>
+
+            <button className="create-client-button" type="submit" disabled={isCreatingClientApp}>
+              {isCreatingClientApp ? "Creating" : "Create client app and key"}
+            </button>
+          </form>
+
+          {generatedClientKey?.secret ? (
+            <section className="client-secret-panel" aria-label="Generated client API key">
+              <div>
+                <h3>New client API key</h3>
+                <p>Give this value to the client backend only. It is shown here from the creation response.</p>
+              </div>
+              <code>{generatedClientKey.secret}</code>
+              <div className="client-env-box">
+                <code>RTC_API_BASE_URL=https://funint.online</code>
+                <code>RTC_CLIENT_API_KEY={generatedClientKey.secret}</code>
+              </div>
+              <div className="client-secret-actions">
+                <button type="button" onClick={copyGeneratedClientKey}>
+                  Copy key
+                </button>
+                <button type="button" className="secondary-button" onClick={copyGeneratedEnv}>
+                  Copy env
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          <section className="client-apps-panel" aria-label="Client apps">
+            <div className="client-apps-table-wrap">
+              <table className="client-apps-table">
+                <thead>
+                  <tr>
+                    <th>Client app</th>
+                    <th>Package</th>
+                    <th>Keys</th>
+                    <th>New key label</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clientApps.length ? (
+                    clientApps.map((app) => {
+                      const currentAppId = getClientAppId(app);
+                      const apiKeys = readApiKeys(app);
+                      const protectedClientApp = isProtectedClientApp(app);
+
+                      return (
+                        <tr key={currentAppId}>
+                          <td>
+                            <strong>{getClientAppName(app)}</strong>
+                            <span>{currentAppId}</span>
+                          </td>
+                          <td>{getClientPackageName(app) || "Not set"}</td>
+                          <td>
+                            {apiKeys.length ? (
+                              <div className="key-preview-list">
+                                {apiKeys.map((apiKey) => (
+                                  <span key={getApiKeyId(apiKey)}>
+                                    {getApiKeyLabel(apiKey)}: {getApiKeyPreview(apiKey)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              "No keys loaded"
+                            )}
+                          </td>
+                          <td>
+                            <input
+                              className="inline-input"
+                              value={keyLabelsByApp[currentAppId] ?? ""}
+                              onChange={(event) =>
+                                setKeyLabelsByApp((labels) => ({
+                                  ...labels,
+                                  [currentAppId]: event.target.value,
+                                }))
+                              }
+                              placeholder="Rotated backend key"
+                            />
+                          </td>
+                          <td>
+                            <div className="table-action-stack">
+                              <button
+                                className="secondary-button table-action-button"
+                                type="button"
+                                onClick={() => handleCreateClientKey(app)}
+                                disabled={creatingKeyAppId === currentAppId}
+                              >
+                                {creatingKeyAppId === currentAppId ? "Generating" : "Generate key"}
+                              </button>
+                              <button
+                                className="danger-button table-action-button"
+                                type="button"
+                                onClick={() => handleDeleteClientApp(app)}
+                                disabled={protectedClientApp || deletingAppId === currentAppId}
+                                title={protectedClientApp ? "The default local development app cannot be deleted" : ""}
+                              >
+                                {deletingAppId === currentAppId ? "Deleting" : "Delete"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td className="empty-cell" colSpan={5}>
+                        No client apps created yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="billing-status" role="status" aria-live="polite">
+              {clientKeyStatus}
+            </p>
+          </section>
         </section>
 
         <section
@@ -300,6 +712,89 @@ function readBillingRows(response) {
   }
 
   return [];
+}
+
+function readClientApps(response) {
+  if (Array.isArray(response?.apps)) {
+    return response.apps;
+  }
+
+  return [];
+}
+
+function readApiKeys(source) {
+  if (Array.isArray(source?.apiKeys)) {
+    return source.apiKeys;
+  }
+
+  if (Array.isArray(source?.api_keys)) {
+    return source.api_keys;
+  }
+
+  return [];
+}
+
+function readGeneratedClientKey(response) {
+  const apiKey = typeof response?.api_key === "string" ? { secret: response.api_key } : response?.apiKey;
+  const app = response?.app ?? {};
+  const appId = getClientAppId(app) || apiKey?.appId || apiKey?.app_id || "";
+  const secret = apiKey?.secret ?? apiKey?.apiKey ?? apiKey?.api_key ?? response?.api_key ?? "";
+
+  return {
+    appId,
+    appName: getClientAppName(app),
+    keyId: apiKey?.id ?? apiKey?.keyId ?? apiKey?.key_id ?? "",
+    label: apiKey?.label ?? "Backend API key",
+    secret,
+    preview: apiKey?.keyPreview ?? apiKey?.key_preview ?? makeKeyPreview(secret),
+  };
+}
+
+function getClientAppId(app) {
+  return app?.appId ?? app?.app_id ?? app?.id ?? "";
+}
+
+function getClientAppName(app) {
+  return app?.name ?? "Untitled client app";
+}
+
+function getClientPackageName(app) {
+  return app?.packageName ?? app?.package_name ?? "";
+}
+
+function isProtectedClientApp(app) {
+  return getClientAppId(app) === "local-rtc-client";
+}
+
+function getApiKeyId(apiKey) {
+  return apiKey?.id ?? apiKey?.keyId ?? apiKey?.key_id ?? getApiKeyPreview(apiKey);
+}
+
+function getApiKeyLabel(apiKey) {
+  return apiKey?.label ?? "API key";
+}
+
+function getApiKeyPreview(apiKey) {
+  return apiKey?.keyPreview ?? apiKey?.key_preview ?? makeKeyPreview(apiKey?.secret ?? apiKey?.apiKey ?? apiKey?.api_key ?? "");
+}
+
+function makeKeyPreview(secret) {
+  if (!secret) {
+    return "secret hidden";
+  }
+
+  if (secret.length <= 20) {
+    return secret;
+  }
+
+  return `${secret.slice(0, 10)}...${secret.slice(-8)}`;
+}
+
+function parseAllowedOrigins(value) {
+  return value
+    .split(/[\n,]+/g)
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 }
 
 function readNumber(value) {
