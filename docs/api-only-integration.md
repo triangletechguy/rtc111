@@ -4,13 +4,14 @@ This guide is for apps that integrate with the RTC Platform through HTTP APIs on
 
 ## Architecture
 
-1. A platform admin creates a client app and client API key.
-2. The client backend stores the client API key in server-side secrets.
-3. The client app talks only to the client backend.
-4. The client backend calls the RTC Platform REST API.
-5. The client backend returns only safe data to the app, such as room metadata or a short-lived RTC access token.
+1. A platform admin creates an RTC project.
+2. RTC Platform returns App ID, App Key, and a backend-only server secret.
+3. The client app initializes the SDK with App ID and App Key.
+4. The client app talks only to the client backend for RTC tokens.
+5. The client backend calls the RTC Platform REST API with the server secret.
+6. The client backend returns only safe data to the app, such as room metadata or a short-lived RTC access token.
 
-Never ship the client API key in a mobile app, web app, desktop app, or other distributed client.
+Never ship the server secret/client API key alias in a mobile app, web app, desktop app, or other distributed client.
 
 ## Base URLs And Auth
 
@@ -32,7 +33,7 @@ Admin endpoints use the platform admin key:
 Authorization: Bearer <RTC_ADMIN_KEY>
 ```
 
-Client endpoints use the per-client API key:
+Client endpoints use the per-project server secret:
 
 ```http
 Authorization: Bearer <CLIENT_API_KEY>
@@ -42,6 +43,9 @@ Default local development keys:
 
 ```text
 RTC_ADMIN_KEY=rtc-admin-dev-key
+RTC_APP_ID=local-rtc-client
+RTC_APP_KEY=rtc-dev-app-key
+RTC_SERVER_SECRET=rtc-dev-api-key
 CLIENT_API_KEY=rtc-dev-api-key
 ```
 
@@ -66,9 +70,9 @@ Useful response fields:
 }
 ```
 
-## 2. Create A Client App
+## 2. Create An RTC Project
 
-This is a platform-admin action. Store the returned `api_key` securely on the client backend.
+This is a platform-admin action. Use `app_id` and `app_key` in the SDK. Store the returned `server_secret` / `api_key` securely on the client backend.
 
 ```bash
 curl -X POST https://funint.online/admin/apps \
@@ -78,7 +82,7 @@ curl -X POST https://funint.online/admin/apps \
     "name": "Acme App",
     "package_name": "com.acme.app",
     "allowed_origins": ["https://app.acme.example"],
-    "key_label": "Production backend key",
+    "key_label": "Production server secret",
     "metadata": {
       "environment": "production"
     }
@@ -91,15 +95,17 @@ Important response fields:
 {
   "app": {
     "app_id": "acme-app",
+    "app_key": "app_...",
     "name": "Acme App"
   },
+  "server_secret": "rtc_...",
   "api_key": "rtc_..."
 }
 ```
 
-## 3. Verify Client Credentials
+## 3. Verify Server Credentials
 
-Use this from the client backend to verify that the configured client API key belongs to the expected app.
+Use this from the client backend to verify that the configured server secret belongs to the expected app.
 
 ```bash
 curl https://funint.online/client/me \
@@ -199,6 +205,8 @@ curl -X POST https://funint.online/client/rtc/token \
   -H "Authorization: Bearer CLIENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
+    "app_id": "acme-app",
+    "app_key": "app_...",
     "external_user_id": "user-123",
     "room_id": "support-room-1",
     "role": "publisher",
@@ -215,6 +223,7 @@ Important response fields:
   "token_type": "Bearer",
   "expires_in": "1h",
   "app_id": "acme-app",
+  "app_key": "app_...",
   "user_id": "user-123",
   "room_id": "support-room-1",
   "role": "publisher",
@@ -243,10 +252,12 @@ app.post("/api/rtc/token", requireAppUser, async (req, res) => {
   const response = await fetch(`${process.env.RTC_API_BASE_URL}/client/rtc/token`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RTC_CLIENT_API_KEY}`,
+      Authorization: `Bearer ${process.env.RTC_SERVER_SECRET ?? process.env.RTC_CLIENT_API_KEY}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
+      app_id: process.env.RTC_APP_ID,
+      app_key: process.env.RTC_APP_KEY,
       external_user_id: req.user.id,
       room_id: req.body.roomId,
       role: "publisher",
@@ -265,6 +276,8 @@ app.post("/api/rtc/token", requireAppUser, async (req, res) => {
   res.json({
     accessToken: token.access_token,
     expiresAt: token.expires_at,
+    appId: token.app_id,
+    appKey: token.app_key,
     roomId: token.room_id,
     rtcMode: token.rtc_mode
   });
@@ -380,7 +393,7 @@ curl -X POST https://funint.online/admin/apps/acme-app/keys \
   -H "Authorization: Bearer RTC_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "label": "Rotated backend key"
+    "label": "Rotated server secret"
   }'
 ```
 

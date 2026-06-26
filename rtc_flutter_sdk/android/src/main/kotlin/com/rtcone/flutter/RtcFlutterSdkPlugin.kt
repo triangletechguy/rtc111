@@ -142,6 +142,8 @@ class RtcFlutterSdkPlugin :
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: RtcDashboardSession.rawDefaultSignalingUrl()
+        val appId = call.argument<String>("appId")?.trim()?.takeIf { it.isNotBlank() }
+        val appKey = call.argument<String>("appKey")?.trim()?.takeIf { it.isNotBlank() }
         val roomId = call.argument<String>("roomId")?.trim()?.takeIf { it.isNotBlank() }
         val rtcMode = call.argument<String>("rtcMode")?.trim()?.takeIf { it.isNotBlank() }
         val speakerOn = call.argument<Boolean>("speakerOn") ?: true
@@ -150,6 +152,15 @@ class RtcFlutterSdkPlugin :
         } catch (error: IllegalArgumentException) {
             val message = error.message ?: "Invalid RTC access token"
             result.error("RTC_TOKEN_INVALID", message, null)
+            emitRtcEvent("error", mapOf("message" to message))
+            return
+        }
+
+        try {
+            com.rtcone.sdk.RtcServiceSdk.validateProjectCredentials(accessToken, appId, appKey)
+        } catch (error: IllegalArgumentException) {
+            val message = error.message ?: "Invalid RTC project credentials"
+            result.error("RTC_PROJECT_INVALID", message, null)
             emitRtcEvent("error", mapOf("message" to message))
             return
         }
@@ -168,6 +179,8 @@ class RtcFlutterSdkPlugin :
         }
         val start = PendingStart(
             accessToken = accessToken,
+            appId = appId,
+            appKey = appKey,
             roomId = roomId,
             signalingUrl = signalingUrl,
             speakerOn = speakerOn,
@@ -238,7 +251,9 @@ class RtcFlutterSdkPlugin :
                 accessToken = start.accessToken,
                 roomId = start.roomId,
                 signalingUrl = start.signalingUrl,
-                listener = createListener()
+                listener = createListener(),
+                appId = start.appId,
+                appKey = start.appKey
             )
 
             session = nextSession
@@ -246,6 +261,8 @@ class RtcFlutterSdkPlugin :
             start.result.success(
                 mapOf(
                     "started" to true,
+                    "appId" to (start.appId ?: start.tokenInfo.appId ?: ""),
+                    "appKey" to (start.appKey ?: start.tokenInfo.appKey ?: ""),
                     "roomId" to (start.roomId ?: start.tokenInfo.roomId ?: ""),
                     "rtcMode" to (start.tokenInfo.rtcMode ?: ""),
                     "signalingUrl" to start.signalingUrl
@@ -366,6 +383,7 @@ class RtcFlutterSdkPlugin :
     ): Map<String, Any?> {
         return mapOf(
             "appId" to tokenInfo.appId,
+            "appKey" to tokenInfo.appKey,
             "roomId" to tokenInfo.roomId,
             "userId" to tokenInfo.userId,
             "externalUserId" to tokenInfo.externalUserId,
@@ -383,6 +401,8 @@ class RtcFlutterSdkPlugin :
 
     private data class PendingStart(
         val accessToken: String,
+        val appId: String?,
+        val appKey: String?,
         val roomId: String?,
         val signalingUrl: String,
         val speakerOn: Boolean,

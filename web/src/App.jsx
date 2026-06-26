@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  RTC_DEFAULT_APP_ID,
+  RTC_DEFAULT_APP_KEY,
   createAdminApp,
   createAdminAppKey,
   deleteAdminApp,
@@ -33,7 +35,7 @@ export default function App() {
   const [newClientAppName, setNewClientAppName] = useState(DEFAULT_CLIENT_APP_NAME);
   const [newClientPackageName, setNewClientPackageName] = useState(DEFAULT_CLIENT_PACKAGE_NAME);
   const [newClientAllowedOrigins, setNewClientAllowedOrigins] = useState("");
-  const [newClientKeyLabel, setNewClientKeyLabel] = useState("Production backend key");
+  const [newClientKeyLabel, setNewClientKeyLabel] = useState("Production server secret");
   const [generatedClientKey, setGeneratedClientKey] = useState(null);
   const [keyLabelsByApp, setKeyLabelsByApp] = useState({});
   const [creatingKeyAppId, setCreatingKeyAppId] = useState("");
@@ -90,6 +92,8 @@ export default function App() {
 
     try {
       const response = await issueRtcToken({
+        appId: RTC_DEFAULT_APP_ID,
+        appKey: RTC_DEFAULT_APP_KEY,
         externalUserId: appId,
         appName: trimmedAppName,
         role: "publisher",
@@ -165,7 +169,7 @@ export default function App() {
       );
 
       setClientApps(appsWithKeys);
-      setClientKeyStatus(appsWithKeys.length ? "Client apps refreshed." : "No client apps created yet.");
+      setClientKeyStatus(appsWithKeys.length ? "RTC projects refreshed." : "No RTC projects created yet.");
       setRtcConnectionStatus("online");
     } catch (event) {
       const message = getErrorMessage(event);
@@ -197,11 +201,11 @@ export default function App() {
         name,
         packageName: newClientPackageName.trim(),
         allowedOrigins: parseAllowedOrigins(newClientAllowedOrigins),
-        keyLabel: newClientKeyLabel.trim() || "Production backend key",
+        keyLabel: newClientKeyLabel.trim() || "Production server secret",
       });
 
       setGeneratedClientKey(readGeneratedClientKey(response));
-      setClientKeyStatus("Client app and backend key created.");
+      setClientKeyStatus("RTC project credentials created.");
       setRtcConnectionStatus("online");
       await loadClientApps();
     } catch (event) {
@@ -230,11 +234,11 @@ export default function App() {
     try {
       const response = await createAdminAppKey({
         appId: currentAppId,
-        label: keyLabelsByApp[currentAppId]?.trim() || "Rotated backend key",
+        label: keyLabelsByApp[currentAppId]?.trim() || "Rotated server secret",
       });
 
       setGeneratedClientKey(readGeneratedClientKey(response));
-      setClientKeyStatus("New backend key generated.");
+      setClientKeyStatus("New server secret generated.");
       setRtcConnectionStatus("online");
       await loadClientApps();
     } catch (event) {
@@ -257,7 +261,7 @@ export default function App() {
     }
 
     const confirmed = window.confirm(
-      `Delete "${appNameToDelete}"?\n\nThis removes its client API keys and in-memory RTC state.`,
+      `Delete "${appNameToDelete}"?\n\nThis removes its server secrets and in-memory RTC state.`,
     );
 
     if (!confirmed) {
@@ -298,7 +302,7 @@ export default function App() {
 
     try {
       await writeClipboardText(generatedClientKey.secret);
-      setClientKeyStatus("Client API key copied.");
+      setClientKeyStatus("Server secret copied.");
     } catch (event) {
       console.error(getErrorMessage(event));
       setClientKeyStatus("Copy failed. Select the key text manually.");
@@ -312,7 +316,13 @@ export default function App() {
 
     try {
       await writeClipboardText(
-        `RTC_API_BASE_URL=https://funint.online\nRTC_CLIENT_API_KEY=${generatedClientKey.secret}`,
+        [
+          "RTC_API_BASE_URL=https://funint.online",
+          `RTC_APP_ID=${generatedClientKey.appId}`,
+          `RTC_APP_KEY=${generatedClientKey.appKey}`,
+          `RTC_SERVER_SECRET=${generatedClientKey.secret}`,
+          `RTC_CLIENT_API_KEY=${generatedClientKey.secret}`,
+        ].join("\n"),
       );
       setClientKeyStatus("Backend env values copied.");
     } catch (event) {
@@ -356,7 +366,7 @@ export default function App() {
             className={activeTab === "client-keys" ? "active" : ""}
             onClick={() => setActiveTab("client-keys")}
           >
-            Client Keys
+            RTC Projects
           </button>
           <button
             id="package-tab"
@@ -418,8 +428,8 @@ export default function App() {
           <form className="client-app-panel" onSubmit={handleCreateClientApp}>
             <div className="panel-header">
               <div>
-                <h2>Client App Keys</h2>
-                <p>Create the backend API key a client needs before their server can issue RTC access tokens.</p>
+                <h2>RTC Projects</h2>
+                <p>Create the App ID/App Key used by the SDK and the server secret used by the backend token endpoint.</p>
               </div>
               <button className="secondary-button" type="button" onClick={loadClientApps} disabled={isClientAppsLoading}>
                 {isClientAppsLoading ? "Refreshing" : "Refresh"}
@@ -428,7 +438,7 @@ export default function App() {
 
             <div className="client-app-form-grid">
               <div className="field-group">
-                <label htmlFor="client-app-name">Client app name</label>
+                <label htmlFor="client-app-name">Project name</label>
                 <input
                   id="client-app-name"
                   value={newClientAppName}
@@ -450,13 +460,13 @@ export default function App() {
               </div>
 
               <div className="field-group">
-                <label htmlFor="client-key-label">Key label</label>
+                <label htmlFor="client-key-label">Server secret label</label>
                 <input
                   id="client-key-label"
                   value={newClientKeyLabel}
                   onChange={(event) => setNewClientKeyLabel(event.target.value)}
                   autoComplete="off"
-                  placeholder="Production backend key"
+                  placeholder="Production server secret"
                 />
               </div>
 
@@ -473,24 +483,28 @@ export default function App() {
             </div>
 
             <button className="create-client-button" type="submit" disabled={isCreatingClientApp}>
-              {isCreatingClientApp ? "Creating" : "Create client app and key"}
+              {isCreatingClientApp ? "Creating" : "Create RTC project"}
             </button>
           </form>
 
           {generatedClientKey?.secret ? (
-            <section className="client-secret-panel" aria-label="Generated client API key">
+            <section className="client-secret-panel" aria-label="Generated RTC project credentials">
               <div>
-                <h3>New client API key</h3>
-                <p>Give this value to the client backend only. It is shown here from the creation response.</p>
+                <h3>New RTC project credentials</h3>
+                <p>Use App ID/App Key in the SDK. Keep the server secret on the backend only.</p>
               </div>
-              <code>{generatedClientKey.secret}</code>
+              <div className="client-env-box">
+                <code>RTC_APP_ID={generatedClientKey.appId}</code>
+                <code>RTC_APP_KEY={generatedClientKey.appKey}</code>
+                <code>RTC_SERVER_SECRET={generatedClientKey.secret}</code>
+              </div>
               <div className="client-env-box">
                 <code>RTC_API_BASE_URL=https://funint.online</code>
                 <code>RTC_CLIENT_API_KEY={generatedClientKey.secret}</code>
               </div>
               <div className="client-secret-actions">
                 <button type="button" onClick={copyGeneratedClientKey}>
-                  Copy key
+                  Copy secret
                 </button>
                 <button type="button" className="secondary-button" onClick={copyGeneratedEnv}>
                   Copy env
@@ -499,15 +513,16 @@ export default function App() {
             </section>
           ) : null}
 
-          <section className="client-apps-panel" aria-label="Client apps">
+          <section className="client-apps-panel" aria-label="RTC projects">
             <div className="client-apps-table-wrap">
               <table className="client-apps-table">
                 <thead>
                   <tr>
-                    <th>Client app</th>
+                    <th>RTC project</th>
                     <th>Package</th>
-                    <th>Keys</th>
-                    <th>New key label</th>
+                    <th>SDK credentials</th>
+                    <th>Server secrets</th>
+                    <th>New secret label</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -526,6 +541,12 @@ export default function App() {
                           </td>
                           <td>{getClientPackageName(app) || "Not set"}</td>
                           <td>
+                            <div className="key-preview-list">
+                              <span>App ID: {currentAppId}</span>
+                              <span>App Key: {getClientAppKey(app)}</span>
+                            </div>
+                          </td>
+                          <td>
                             {apiKeys.length ? (
                               <div className="key-preview-list">
                                 {apiKeys.map((apiKey) => (
@@ -535,7 +556,7 @@ export default function App() {
                                 ))}
                               </div>
                             ) : (
-                              "No keys loaded"
+                              "No server secrets loaded"
                             )}
                           </td>
                           <td>
@@ -548,7 +569,7 @@ export default function App() {
                                   [currentAppId]: event.target.value,
                                 }))
                               }
-                              placeholder="Rotated backend key"
+                              placeholder="Rotated server secret"
                             />
                           </td>
                           <td>
@@ -559,7 +580,7 @@ export default function App() {
                                 onClick={() => handleCreateClientKey(app)}
                                 disabled={creatingKeyAppId === currentAppId}
                               >
-                                {creatingKeyAppId === currentAppId ? "Generating" : "Generate key"}
+                                {creatingKeyAppId === currentAppId ? "Generating" : "Generate secret"}
                               </button>
                               <button
                                 className="danger-button table-action-button"
@@ -577,8 +598,8 @@ export default function App() {
                     })
                   ) : (
                     <tr>
-                      <td className="empty-cell" colSpan={5}>
-                        No client apps created yet.
+                      <td className="empty-cell" colSpan={6}>
+                        No RTC projects created yet.
                       </td>
                     </tr>
                   )}
@@ -738,13 +759,24 @@ function readGeneratedClientKey(response) {
   const apiKey = typeof response?.api_key === "string" ? { secret: response.api_key } : response?.apiKey;
   const app = response?.app ?? {};
   const appId = getClientAppId(app) || apiKey?.appId || apiKey?.app_id || "";
-  const secret = apiKey?.secret ?? apiKey?.apiKey ?? apiKey?.api_key ?? response?.api_key ?? "";
+  const appKey = getClientAppKey(app) || response?.appKey || response?.app_key || "";
+  const secret =
+    apiKey?.secret ??
+    apiKey?.serverSecret ??
+    apiKey?.server_secret ??
+    apiKey?.apiKey ??
+    apiKey?.api_key ??
+    response?.serverSecret ??
+    response?.server_secret ??
+    response?.api_key ??
+    "";
 
   return {
     appId,
+    appKey,
     appName: getClientAppName(app),
     keyId: apiKey?.id ?? apiKey?.keyId ?? apiKey?.key_id ?? "",
-    label: apiKey?.label ?? "Backend API key",
+    label: apiKey?.label ?? "Server secret",
     secret,
     preview: apiKey?.keyPreview ?? apiKey?.key_preview ?? makeKeyPreview(secret),
   };
@@ -752,6 +784,10 @@ function readGeneratedClientKey(response) {
 
 function getClientAppId(app) {
   return app?.appId ?? app?.app_id ?? app?.id ?? "";
+}
+
+function getClientAppKey(app) {
+  return app?.appKey ?? app?.app_key ?? "";
 }
 
 function getClientAppName(app) {
@@ -771,11 +807,20 @@ function getApiKeyId(apiKey) {
 }
 
 function getApiKeyLabel(apiKey) {
-  return apiKey?.label ?? "API key";
+  return apiKey?.label ?? "Server secret";
 }
 
 function getApiKeyPreview(apiKey) {
-  return apiKey?.keyPreview ?? apiKey?.key_preview ?? makeKeyPreview(apiKey?.secret ?? apiKey?.apiKey ?? apiKey?.api_key ?? "");
+  return apiKey?.keyPreview ??
+    apiKey?.key_preview ??
+    makeKeyPreview(
+      apiKey?.secret ??
+        apiKey?.serverSecret ??
+        apiKey?.server_secret ??
+        apiKey?.apiKey ??
+        apiKey?.api_key ??
+        "",
+    );
 }
 
 function makeKeyPreview(secret) {

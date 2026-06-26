@@ -55,8 +55,14 @@ class RtcServiceSdk(
         val rtcMode: String = if (enableVideo) "video" else "voice",
         val iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
-        )
+        ),
+        val appId: String? = null,
+        val appKey: String? = null
     ) {
+        init {
+            RtcServiceSdk.validateProjectCredentials(accessToken, appId, appKey)
+        }
+
         companion object {
             fun audioRoom(
                 signalingUrl: String,
@@ -160,7 +166,9 @@ class RtcServiceSdk(
                 accessToken: String,
                 roomId: String? = null,
                 signalingUrl: String = RtcServiceSdk.DEFAULT_SIGNALING_URL,
-                iceServers: List<PeerConnection.IceServer> = RtcServiceSdk.defaultIceServers()
+                iceServers: List<PeerConnection.IceServer> = RtcServiceSdk.defaultIceServers(),
+                appId: String? = null,
+                appKey: String? = null
             ): Config {
                 val tokenInfo = RtcServiceSdk.parseAccessToken(accessToken)
                 val resolvedRoomId = roomId?.takeIf { it.isNotBlank() }
@@ -178,7 +186,9 @@ class RtcServiceSdk(
                     enableVideo = enableVideo,
                     enableNoiseCancellation = enableAudio,
                     rtcMode = tokenInfo.rtcMode ?: if (enableVideo) "video" else "voice",
-                    iceServers = iceServers
+                    iceServers = iceServers,
+                    appId = appId,
+                    appKey = appKey
                 )
             }
         }
@@ -187,6 +197,7 @@ class RtcServiceSdk(
     data class AccessTokenInfo(
         val rawToken: String,
         val appId: String?,
+        val appKey: String?,
         val roomId: String?,
         val userId: String?,
         val externalUserId: String?,
@@ -2229,6 +2240,7 @@ class RtcServiceSdk(
             return AccessTokenInfo(
                 rawToken = accessToken,
                 appId = payload.optNullableString("appId", "app_id"),
+                appKey = payload.optNullableString("appKey", "app_key"),
                 roomId = payload.optNullableString("roomId", "room_id"),
                 userId = payload.optNullableString("userId", "user_id", "sub"),
                 externalUserId = payload.optNullableString("externalUserId", "external_user_id"),
@@ -2242,6 +2254,33 @@ class RtcServiceSdk(
                 tokenId = payload.optNullableString("jti", "tokenId", "token_id"),
                 claims = payload
             )
+        }
+
+        @JvmStatic
+        fun validateProjectCredentials(
+            accessToken: String,
+            expectedAppId: String? = null,
+            expectedAppKey: String? = null
+        ) {
+            val tokenInfo = parseAccessToken(accessToken)
+            val normalizedExpectedAppId = expectedAppId?.trim()?.takeIf { it.isNotBlank() }
+            val normalizedExpectedAppKey = expectedAppKey?.trim()?.takeIf { it.isNotBlank() }
+
+            if (
+                normalizedExpectedAppId != null &&
+                !tokenInfo.appId.isNullOrBlank() &&
+                tokenInfo.appId != normalizedExpectedAppId
+            ) {
+                throw IllegalArgumentException("RTC access token app_id does not match the initialized App ID")
+            }
+
+            if (
+                normalizedExpectedAppKey != null &&
+                !tokenInfo.appKey.isNullOrBlank() &&
+                tokenInfo.appKey != normalizedExpectedAppKey
+            ) {
+                throw IllegalArgumentException("RTC access token app_key does not match the initialized App Key")
+            }
         }
 
         @JvmStatic

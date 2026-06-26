@@ -74,12 +74,16 @@ class RtcDashboardSession private constructor(
             accessToken: String,
             roomId: String? = null,
             signalingUrl: String = RtcServiceSdk.DEFAULT_SIGNALING_URL,
-            listener: Listener = object : Listener {}
+            listener: Listener = object : Listener {},
+            appId: String? = null,
+            appKey: String? = null
         ): RtcDashboardSession {
             val config = RtcServiceSdk.Config.dashboardToken(
                 accessToken = accessToken,
                 roomId = roomId,
-                signalingUrl = signalingUrl
+                signalingUrl = signalingUrl,
+                appId = appId,
+                appKey = appKey
             )
             val bridge = DashboardListener(config.roomId, listener)
             val sdk = RtcServiceSdk(context.applicationContext, config, bridge)

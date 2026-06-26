@@ -3,6 +3,12 @@ import { io } from "socket.io-client";
 export const RTC_DEFAULT_SIGNALING_URL =
   import.meta.env.VITE_SIGNALING_URL ?? "http://localhost:4000";
 
+export const RTC_DEFAULT_APP_ID =
+  import.meta.env.VITE_RTC_APP_ID ?? "local-rtc-client";
+
+export const RTC_DEFAULT_APP_KEY =
+  import.meta.env.VITE_RTC_APP_KEY ?? "rtc-dev-app-key";
+
 export const RTC_DEFAULT_API_KEY =
   import.meta.env.VITE_RTC_API_KEY ?? "rtc-dev-api-key";
 
@@ -328,6 +334,8 @@ export async function createLivePkRoom(options = {}) {
 export async function issueRtcToken({
   apiUrl = RTC_DEFAULT_SIGNALING_URL,
   apiKey = RTC_DEFAULT_API_KEY,
+  appId,
+  appKey,
   appName,
   externalUserId,
   roomId,
@@ -339,6 +347,8 @@ export async function issueRtcToken({
     method: "POST",
     headers: getClientHeaders(apiKey),
     body: {
+      ...(appId ? { app_id: appId } : {}),
+      ...(appKey ? { app_key: appKey } : {}),
       ...(appName ? { app_name: appName } : {}),
       external_user_id: externalUserId,
       ...(roomId ? { room_id: roomId } : {}),
@@ -548,18 +558,19 @@ export async function endRtcSession({
 export class RtcServiceClient extends EventTarget {
   constructor({
     signalingUrl = RTC_DEFAULT_SIGNALING_URL,
+    appId = RTC_DEFAULT_APP_ID,
+    appKey = RTC_DEFAULT_APP_KEY,
     token,
     iceServers = DEFAULT_ICE_SERVERS,
     mediaConstraints = { video: true, audio: true },
   } = {}) {
     super();
 
-    if (!token) {
-      throw new Error("RTC token is required");
-    }
-
     this.signalingUrl = signalingUrl;
-    this.token = token;
+    this.appId = appId;
+    this.appKey = appKey;
+    this.token = "";
+    this.tokenInfo = null;
     this.iceServers = iceServers;
     this.isNoiseCancellationEnabled = getAudioProcessingEnabled(mediaConstraints);
     this.mediaConstraints = withNoiseCancellation(mediaConstraints, this.isNoiseCancellationEnabled);
@@ -589,6 +600,10 @@ export class RtcServiceClient extends EventTarget {
       state: RTC_CONNECTION_INDICATORS.DISCONNECTED,
       updatedAt: new Date().toISOString(),
     };
+
+    if (token) {
+      this.setAccessToken(token);
+    }
   }
 
   on(eventName, handler) {
@@ -613,7 +628,32 @@ export class RtcServiceClient extends EventTarget {
     }
   }
 
+  setAccessToken(token) {
+    const trimmedToken = token?.trim();
+
+    if (!trimmedToken) {
+      throw new Error("RTC token is required");
+    }
+
+    const tokenInfo = parseJwtPayload(trimmedToken);
+
+    validateRtcProjectCredentials({
+      expectedAppId: this.appId,
+      expectedAppKey: this.appKey,
+      tokenInfo,
+    });
+
+    this.token = trimmedToken;
+    this.tokenInfo = tokenInfo;
+
+    return tokenInfo;
+  }
+
   async connect() {
+    if (!this.token) {
+      throw new Error("RTC token is required before connecting");
+    }
+
     if (this.socket?.connected) {
       this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTED);
       return this.socket;
@@ -622,7 +662,11 @@ export class RtcServiceClient extends EventTarget {
     this.updateConnectionIndicator(RTC_CONNECTION_INDICATORS.CONNECTING);
 
     this.socket = io(this.signalingUrl, {
-      auth: { token: this.token },
+      auth: {
+        token: this.token,
+        appId: this.appId,
+        appKey: this.appKey,
+      },
       transports: ["websocket", "polling"],
     });
 
@@ -2082,6 +2126,46 @@ function getDefaultPermissionsForMode(rtcMode, cameraEnabled = !isAudioOnlyMode(
   }
 
   return RTC_AUDIO_ROOM_PERMISSIONS;
+}
+
+export function parseRtcAccessToken(accessToken) {
+  return parseJwtPayload(accessToken);
+}
+
+function parseJwtPayload(accessToken) {
+  const [, encodedPayload] = String(accessToken ?? "").split(".");
+
+  if (!encodedPayload) {
+    throw new Error("RTC access token must be a JWT");
+  }
+
+  try {
+    return JSON.parse(decodeBase64Url(encodedPayload));
+  } catch {
+    throw new Error("RTC access token payload is invalid");
+  }
+}
+
+function decodeBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+
+  return new TextDecoder().decode(bytes);
+}
+
+function validateRtcProjectCredentials({ expectedAppId, expectedAppKey, tokenInfo }) {
+  const tokenAppId = tokenInfo?.appId ?? tokenInfo?.app_id;
+  const tokenAppKey = tokenInfo?.appKey ?? tokenInfo?.app_key;
+
+  if (expectedAppId && tokenAppId && tokenAppId !== expectedAppId) {
+    throw new Error("RTC access token app_id does not match the initialized App ID");
+  }
+
+  if (expectedAppKey && tokenAppKey && tokenAppKey !== expectedAppKey) {
+    throw new Error("RTC access token app_key does not match the initialized App Key");
+  }
 }
 
 function isAudioOnlyMode(rtcMode) {

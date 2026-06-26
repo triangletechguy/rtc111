@@ -8,20 +8,21 @@ For focused setup guides, see [client-api-handoff.md](client-api-handoff.md) whe
 
 - Backend API and Socket.IO signaling: `https://funint.online`
 - Admin endpoints: `Authorization: Bearer <RTC_ADMIN_KEY>`
-- Client endpoints: `Authorization: Bearer <CLIENT_API_KEY>`
+- Client endpoints: `Authorization: Bearer <RTC_SERVER_SECRET>`
 
 Set these for deployed environments:
 
 ```bash
 export RTC_ADMIN_KEY="change-this-admin-key"
-export RTC_API_KEY="change-this-default-client-key"
+export RTC_APP_KEY="change-this-default-app-key"
+export RTC_API_KEY="change-this-default-server-secret"
 export RTC_TOKEN_SECRET="change-this-token-secret"
 export RTC_BILLING_RATE_PER_MINUTE="0"
 ```
 
-## 1. Create A Client App
+## 1. Create An RTC Project
 
-Use the platform admin key to create an app for a customer/client. The response includes a client API key. Show or store this API key only once.
+Use the platform admin key to create an RTC project for a customer/client. The response includes SDK credentials (`app_id`, `app_key`) and a backend-only server secret (`server_secret` / `api_key`). Show or store the server secret only once.
 
 ```bash
 curl -X POST https://funint.online/admin/apps \
@@ -43,15 +44,17 @@ Important response fields:
 {
   "app": {
     "app_id": "acme-android-app",
+    "app_key": "app_...",
     "name": "Acme Android App"
   },
+  "server_secret": "rtc_...",
   "api_key": "rtc_..."
 }
 ```
 
 ## 2. Client Server Issues RTC Tokens
 
-The client API key should be used from the client's backend, not hard-coded inside the APK. The Android app should request an RTC token from the client's backend, and that backend should call this RTC Platform API.
+The app initializes the SDK with `app_id` and `app_key`. The server secret should be used from the client's backend, not hard-coded inside the APK. The Android app should request an RTC token from the client's backend, and that backend should call this RTC Platform API.
 
 Sync or create a user:
 
@@ -84,9 +87,11 @@ Issue an RTC token for the mobile app:
 
 ```bash
 curl -X POST https://funint.online/client/rtc/token \
-  -H "Authorization: Bearer CLIENT_API_KEY" \
+  -H "Authorization: Bearer RTC_SERVER_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
+    "app_id": "acme-android-app",
+    "app_key": "app_...",
     "external_user_id": "user-123",
     "room_id": "support-room-1",
     "role": "publisher",
@@ -587,7 +592,7 @@ Authorization: Bearer <RTC_ADMIN_KEY>
 Client endpoints require:
 
 ```http
-Authorization: Bearer <CLIENT_API_KEY>
+Authorization: Bearer <RTC_SERVER_SECRET>
 ```
 
 - `GET /client/me`

@@ -25,13 +25,15 @@ Use the self-contained AAR for file-based app integration. It embeds WebRTC, Soc
 
 ## Runtime Endpoint
 
-Use the deployed signaling URL and an RTC access token returned by the dashboard/backend. The easiest path is the dashboard-token helper:
+Use the deployed signaling URL, App ID/App Key, and an RTC access token returned by your backend. The easiest path is the dashboard-token helper:
 
 ```kotlin
 import com.rtcone.sdk.RtcDashboardSession
 
 val rtc = RtcDashboardSession.start(
     context = this,
+    appId = "client-company-app",
+    appKey = "app_...",
     accessToken = tokenFromDashboardOrBackend,
     roomId = "room1",
     listener = object : RtcDashboardSession.Listener {
@@ -55,6 +57,8 @@ If the token includes `roomId`/`room_id`, the SDK can read it:
 ```kotlin
 val rtc = RtcDashboardSession.start(
     context = this,
+    appId = "client-company-app",
+    appKey = "app_...",
     accessToken = tokenWithRoomId,
     listener = listener
 )
@@ -86,7 +90,9 @@ Lower-level configuration remains available:
 RtcServiceSdk.Config(
     signalingUrl = "https://funint.online",
     accessToken = tokenFromYourBackend,
-    roomId = "room1"
+    roomId = "room1",
+    appId = "client-company-app",
+    appKey = "app_..."
 )
 ```
 

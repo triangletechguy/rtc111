@@ -4,20 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class RtcEvent {
-  const RtcEvent({
-    required this.name,
-    required this.data,
-  });
+  const RtcEvent({required this.name, required this.data});
 
   factory RtcEvent.fromMethodCall(MethodCall call) {
     return RtcEvent.fromMap(_stringMap(call.arguments));
   }
 
   factory RtcEvent.fromMap(Map<String, dynamic> data) {
-    return RtcEvent(
-      name: data['event']?.toString() ?? 'unknown',
-      data: data,
-    );
+    return RtcEvent(name: data['event']?.toString() ?? 'unknown', data: data);
   }
 
   final String name;
@@ -27,6 +21,8 @@ class RtcEvent {
 class RtcStartResult {
   const RtcStartResult({
     required this.started,
+    required this.appId,
+    required this.appKey,
     required this.roomId,
     required this.rtcMode,
     required this.signalingUrl,
@@ -35,6 +31,8 @@ class RtcStartResult {
   factory RtcStartResult.fromMap(Map<String, dynamic> data) {
     return RtcStartResult(
       started: data['started'] == true,
+      appId: data['appId']?.toString() ?? '',
+      appKey: data['appKey']?.toString() ?? '',
       roomId: data['roomId']?.toString() ?? '',
       rtcMode: data['rtcMode']?.toString() ?? '',
       signalingUrl: data['signalingUrl']?.toString() ?? '',
@@ -42,6 +40,8 @@ class RtcStartResult {
   }
 
   final bool started;
+  final String appId;
+  final String appKey;
   final String roomId;
   final String rtcMode;
   final String signalingUrl;
@@ -50,6 +50,7 @@ class RtcStartResult {
 class RtcTokenInfo {
   const RtcTokenInfo({
     required this.appId,
+    required this.appKey,
     required this.roomId,
     required this.userId,
     required this.externalUserId,
@@ -67,6 +68,7 @@ class RtcTokenInfo {
   factory RtcTokenInfo.fromMap(Map<String, dynamic> data) {
     return RtcTokenInfo(
       appId: data['appId']?.toString(),
+      appKey: data['appKey']?.toString(),
       roomId: data['roomId']?.toString(),
       userId: data['userId']?.toString(),
       externalUserId: data['externalUserId']?.toString(),
@@ -83,6 +85,7 @@ class RtcTokenInfo {
   }
 
   final String? appId;
+  final String? appKey;
   final String? roomId;
   final String? userId;
   final String? externalUserId;
@@ -101,6 +104,14 @@ class RtcFlutterSdk {
   RtcFlutterSdk._();
 
   static const String defaultSignalingUrl = 'https://funint.online';
+  static const String defaultAppId = String.fromEnvironment(
+    'RTC_APP_ID',
+    defaultValue: 'local-rtc-client',
+  );
+  static const String defaultAppKey = String.fromEnvironment(
+    'RTC_APP_KEY',
+    defaultValue: 'rtc-dev-app-key',
+  );
   static const String defaultAccessToken = String.fromEnvironment(
     'RTC_ACCESS_TOKEN',
     defaultValue: '',
@@ -114,13 +125,23 @@ class RtcFlutterSdk {
       StreamController<RtcEvent>.broadcast();
 
   static bool _initialized = false;
+  static String _appId = defaultAppId;
+  static String _appKey = defaultAppKey;
 
   static Stream<RtcEvent> get events {
     initialize();
     return _events.stream;
   }
 
-  static void initialize() {
+  static void initialize({String? appId, String? appKey}) {
+    if (appId?.trim().isNotEmpty == true) {
+      _appId = appId!.trim();
+    }
+
+    if (appKey?.trim().isNotEmpty == true) {
+      _appKey = appKey!.trim();
+    }
+
     if (_initialized) return;
 
     _channel.setMethodCallHandler((call) async {
@@ -135,13 +156,15 @@ class RtcFlutterSdk {
   }
 
   static Future<RtcStartResult> start({
+    String? appId,
+    String? appKey,
     String? accessToken,
     String? roomId,
     String signalingUrl = defaultSignalingUrl,
     String? rtcMode,
     bool speakerOn = true,
   }) async {
-    initialize();
+    initialize(appId: appId, appKey: appKey);
     _ensureAndroid();
 
     final token = accessToken?.trim().isNotEmpty == true
@@ -155,6 +178,8 @@ class RtcFlutterSdk {
     }
 
     final raw = await _channel.invokeMethod<Object?>('start', {
+      'appId': _appId,
+      'appKey': _appKey,
       'accessToken': token,
       'roomId': roomId?.trim(),
       'signalingUrl': signalingUrl.trim(),
@@ -178,10 +203,9 @@ class RtcFlutterSdk {
 
   static Future<RtcTokenInfo> parseToken(String accessToken) async {
     _ensureAndroid();
-    final raw = await _channel.invokeMethod<Object?>(
-      'parseToken',
-      {'accessToken': accessToken},
-    );
+    final raw = await _channel.invokeMethod<Object?>('parseToken', {
+      'accessToken': accessToken,
+    });
     return RtcTokenInfo.fromMap(_stringMap(raw));
   }
 

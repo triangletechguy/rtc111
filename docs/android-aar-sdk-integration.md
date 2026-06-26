@@ -4,13 +4,14 @@ This guide shows how to integrate the RTC Android SDK AAR into a client Android 
 
 ## Integration Flow
 
-1. The platform admin creates a client app and client API key.
-2. The client backend stores the client API key securely.
-3. The Android app asks the client backend for an RTC token.
-4. The client backend calls `POST /client/rtc/token`.
-5. The Android app passes the returned `access_token` to `RtcServiceSdk.Config`.
+1. The platform admin creates an RTC project.
+2. RTC Platform returns App ID, App Key, and a backend-only server secret.
+3. The Android app initializes the SDK with App ID and App Key.
+4. The Android app asks the client backend for an RTC token.
+5. The client backend calls `POST /client/rtc/token` with the server secret.
+6. The Android app passes the returned `access_token` to `RtcDashboardSession` or `RtcServiceSdk.Config`.
 
-Do not put the client API key in the APK. The APK should only receive short-lived RTC access tokens.
+Do not put the server secret in the APK. The APK may contain App ID/App Key and should only receive short-lived RTC access tokens.
 
 ## Build The SDK AAR
 
@@ -97,6 +98,8 @@ dependencies:
 import 'package:rtc_flutter_sdk/rtc_flutter_sdk.dart';
 
 await RtcFlutterSdk.start(
+  appId: 'client-company-app',
+  appKey: 'app_...',
   accessToken: dashboardAccessToken,
   roomId: 'support-room-1',
 );
@@ -140,13 +143,15 @@ Audio-only rooms only require microphone permission at runtime.
 
 ## Issue A Token From The Client Backend
 
-The Android app should call the client backend with the user's normal app session. The client backend then calls the RTC platform with its private client API key:
+The Android app should call the client backend with the user's normal app session. The client backend then calls the RTC platform with its private server secret:
 
 ```bash
 curl -X POST https://funint.online/client/rtc/token \
-  -H "Authorization: Bearer CLIENT_API_KEY" \
+  -H "Authorization: Bearer RTC_SERVER_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
+    "app_id": "client-company-app",
+    "app_key": "app_...",
     "external_user_id": "user-123",
     "room_id": "support-room-1",
     "role": "publisher",
@@ -162,6 +167,8 @@ Important response fields:
   "access_token": "JWT_TOKEN",
   "token_type": "Bearer",
   "expires_in": "1h",
+  "app_id": "client-company-app",
+  "app_key": "app_...",
   "room_id": "support-room-1",
   "user_id": "user-123",
   "rtc_mode": "video",
@@ -169,7 +176,7 @@ Important response fields:
 }
 ```
 
-Return only `access_token` and the room metadata needed by the Android app. If the dashboard-issued token already includes `room_id`, the SDK can read it from the token. If the token does not include `room_id`, pass the room id from the app UI when creating the SDK.
+Return only `access_token`, App ID/App Key, and the room metadata needed by the Android app. If the dashboard-issued token already includes `room_id`, the SDK can read it from the token. If the token does not include `room_id`, pass the room id from the app UI when creating the SDK.
 
 The token is checked during the Socket.IO/WebRTC signaling connection. If the token expires or is revoked, fetch a fresh token from the client backend and create a new `RtcServiceSdk` instance with the new token.
 
@@ -188,6 +195,8 @@ private fun startRtc() {
 
     rtc = RtcDashboardSession.start(
         context = this,
+        appId = "client-company-app",
+        appKey = "app_...",
         accessToken = accessToken,
         roomId = roomId,
         listener = object : RtcDashboardSession.Listener {

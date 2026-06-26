@@ -13,6 +13,7 @@ const RTC_TOKEN_ISSUER = "rtc-platform";
 const RTC_TOKEN_SECRET = process.env.RTC_TOKEN_SECRET ?? "rtc-dev-secret-change-me";
 const RTC_TOKEN_EXPIRES_IN: SignOptions["expiresIn"] = "1h";
 const RTC_API_KEY = process.env.RTC_API_KEY ?? "rtc-dev-api-key";
+const RTC_APP_KEY = process.env.RTC_APP_KEY ?? "rtc-dev-app-key";
 const RTC_ADMIN_KEY = process.env.RTC_ADMIN_KEY ?? "rtc-admin-dev-key";
 const DEFAULT_ROOM_CAPACITY = Number(process.env.RTC_DEFAULT_ROOM_CAPACITY ?? 8);
 const parsedBillingRate = Number(process.env.RTC_BILLING_RATE_PER_MINUTE ?? 0);
@@ -33,6 +34,7 @@ type RtcPermission =
 type RtcAccessToken = JwtPayload & {
   scope: "rtc";
   appId: string;
+  appKey?: string;
   userId: string;
   externalUserId?: string;
   roomId?: string;
@@ -43,6 +45,7 @@ type RtcAccessToken = JwtPayload & {
 
 type ClientApp = {
   id: string;
+  appKey: string;
   name: string;
   packageName?: string;
   allowedOrigins: string[];
@@ -270,6 +273,7 @@ type StoredRtcToken = {
   token: string;
   tokenId: string;
   appId: string;
+  appKey?: string;
   userId: string;
   externalUserId?: string;
   roomId?: string;
@@ -474,16 +478,32 @@ app.post("/admin/apps", requireAdminAuth, (req, res) => {
     metadata,
     keyLabel,
   });
+  const serializedApp = serializeClientApp(clientApp);
+  const serializedServerKey = serializeApiKey(apiKey, true);
 
   res.status(201).json({
-    app: serializeClientApp(clientApp),
-    apiKey: serializeApiKey(apiKey, true),
+    app: serializedApp,
+    appId: clientApp.id,
+    app_id: clientApp.id,
+    appKey: clientApp.appKey,
+    app_key: clientApp.appKey,
+    apiKey: serializedServerKey,
     api_key: apiKey.secret,
+    serverKey: serializedServerKey,
+    server_key: serializedServerKey,
+    serverSecret: apiKey.secret,
+    server_secret: apiKey.secret,
     integration: {
       apiBaseUrl: `http://localhost:${PORT}`,
       api_base_url: `http://localhost:${PORT}`,
+      appId: clientApp.id,
+      app_id: clientApp.id,
+      appKey: clientApp.appKey,
+      app_key: clientApp.appKey,
       authorizationHeader: `Bearer ${apiKey.secret}`,
       authorization_header: `Bearer ${apiKey.secret}`,
+      serverAuthorizationHeader: `Bearer ${apiKey.secret}`,
+      server_authorization_header: `Bearer ${apiKey.secret}`,
     },
   });
 });
@@ -570,6 +590,10 @@ app.post("/admin/apps/:appId/keys", requireAdminAuth, (req, res) => {
     app: serializeClientApp(clientApp),
     apiKey: serializeApiKey(apiKey, true),
     api_key: apiKey.secret,
+    serverKey: serializeApiKey(apiKey, true),
+    server_key: serializeApiKey(apiKey, true),
+    serverSecret: apiKey.secret,
+    server_secret: apiKey.secret,
   });
 });
 
@@ -616,6 +640,7 @@ app.get("/client/me", requireClientAuth, (req, res) => {
       "users.sync",
       "rooms.create",
       "rooms.state",
+      "project.credentials",
       "rtc.token",
       "rtc.session.start",
       "rtc.session.end",
@@ -742,9 +767,27 @@ app.get("/client/rooms/:roomId", requireClientAuth, (req, res) => {
 
 app.post("/client/rtc/token", requireClientAuth, (req, res) => {
   const clientApp = getClientApp(req);
+  const requestedAppId =
+    readString(req.body?.app_id) ||
+    readString(req.body?.appId) ||
+    readString(req.header("x-rtc-app-id"));
+  const requestedAppKey =
+    readString(req.body?.app_key) ||
+    readString(req.body?.appKey) ||
+    readString(req.header("x-rtc-app-key"));
   const appName = readString(req.body?.app_name) || readString(req.body?.appName);
   const externalUserId = readString(req.body?.external_user_id) || readString(req.body?.externalUserId) || appName;
   const roomId = readString(req.body?.room_id) || readString(req.body?.roomId);
+
+  if (requestedAppId && requestedAppId !== clientApp.id) {
+    res.status(403).json({ error: "app_id does not match the authenticated RTC project" });
+    return;
+  }
+
+  if (requestedAppKey && requestedAppKey !== clientApp.appKey) {
+    res.status(403).json({ error: "app_key does not match the authenticated RTC project" });
+    return;
+  }
 
   if (!externalUserId) {
     res.status(400).json({ error: "app_name or external_user_id is required" });
@@ -975,6 +1018,7 @@ io.use((socket, next) => {
 
     socket.data.accessToken = token;
     socket.data.appId = decoded.appId;
+    socket.data.appKey = decoded.appKey;
     socket.data.userId = decoded.userId;
     socket.data.externalUserId = decoded.externalUserId;
     socket.data.tokenRoomId = decoded.roomId;
@@ -1786,6 +1830,7 @@ function bootstrapDefaultClientApp() {
 
   createClientApp({
     id: DEFAULT_CLIENT_APP_ID,
+    appKey: RTC_APP_KEY,
     name: "RTC Platform Client",
     packageName: "local.dev",
     allowedOrigins: ["*"],
@@ -1797,6 +1842,7 @@ function bootstrapDefaultClientApp() {
 
 function createClientApp({
   id,
+  appKey,
   name,
   packageName,
   allowedOrigins = [],
@@ -1811,10 +1857,12 @@ function createClientApp({
   metadata?: Record<string, unknown>;
   keyLabel?: string;
   apiKey?: string;
+  appKey?: string;
 }) {
   const now = new Date().toISOString();
   const appRecord: ClientApp = {
     id,
+    appKey: appKey || createRtcAppKey(),
     name,
     ...(packageName ? { packageName } : {}),
     allowedOrigins,
@@ -1949,6 +1997,10 @@ function createClientApiKeySecret() {
   return `rtc_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`;
 }
 
+function createRtcAppKey() {
+  return `app_${randomUUID().replace(/-/g, "")}`;
+}
+
 function issueToken({
   appId,
   roomId,
@@ -1967,10 +2019,12 @@ function issueToken({
   permissions: RtcPermission[];
 }) {
   const tokenId = randomUUID();
+  const appKey = clientApps.get(appId)?.appKey;
 
   const payload: RtcAccessToken = {
     scope: "rtc",
     appId,
+    ...(appKey ? { appKey } : {}),
     userId,
     ...(externalUserId ? { externalUserId } : {}),
     ...(roomId ? { roomId } : {}),
@@ -1998,6 +2052,7 @@ function issueToken({
     token,
     tokenId,
     appId,
+    ...(appKey ? { appKey } : {}),
     userId,
     externalUserId,
     ...(roomId ? { roomId } : {}),
@@ -2024,6 +2079,7 @@ function issueToken({
     expires_at: expiresAt,
     appId,
     app_id: appId,
+    ...(appKey ? { appKey, app_key: appKey } : {}),
     userId,
     user_id: userId,
     ...(externalUserId ? { externalUserId, external_user_id: externalUserId } : {}),
@@ -2070,6 +2126,10 @@ function verifyRtcToken(token: string) {
     throw new Error("RTC token client app does not match saved token");
   }
 
+  if (storedToken.appKey && decoded.appKey !== storedToken.appKey) {
+    throw new Error("RTC token app key does not match saved token");
+  }
+
   if (decoded.jti && decoded.jti !== storedToken.tokenId) {
     throw new Error("RTC token id does not match saved token");
   }
@@ -2091,6 +2151,7 @@ function verifyRtcToken(token: string) {
   return {
     ...decoded,
     appId: decoded.appId || storedToken.appId,
+    appKey: decoded.appKey || storedToken.appKey,
     role: readString(decoded.role) || storedToken.role || "publisher",
     rtcMode: readString(decoded.rtcMode) || storedToken.rtcMode || "video",
     permissions: readPermissions(decoded.permissions, storedToken.permissions),
@@ -2161,6 +2222,8 @@ function serializeStoredToken(storedToken: StoredRtcToken) {
     token_preview: `${storedToken.token.slice(0, 24)}...${storedToken.token.slice(-12)}`,
     appId: storedToken.appId,
     app_id: storedToken.appId,
+    appKey: storedToken.appKey,
+    app_key: storedToken.appKey,
     userId: storedToken.userId,
     user_id: storedToken.userId,
     externalUserId: storedToken.externalUserId,
@@ -2188,6 +2251,8 @@ function serializeClientApp(clientApp: ClientApp) {
     id: clientApp.id,
     appId: clientApp.id,
     app_id: clientApp.id,
+    appKey: clientApp.appKey,
+    app_key: clientApp.appKey,
     name: clientApp.name,
     packageName: clientApp.packageName,
     package_name: clientApp.packageName,
@@ -2211,7 +2276,17 @@ function serializeApiKey(apiKey: StoredApiKey, includeSecret = false) {
     label: apiKey.label,
     keyPreview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
     key_preview: `${apiKey.secret.slice(0, 10)}...${apiKey.secret.slice(-8)}`,
-    ...(includeSecret ? { secret: apiKey.secret, apiKey: apiKey.secret, api_key: apiKey.secret } : {}),
+    ...(includeSecret
+      ? {
+        secret: apiKey.secret,
+        apiKey: apiKey.secret,
+        api_key: apiKey.secret,
+        clientApiKey: apiKey.secret,
+        client_api_key: apiKey.secret,
+        serverSecret: apiKey.secret,
+        server_secret: apiKey.secret,
+      }
+      : {}),
     createdAt: apiKey.createdAt,
     created_at: apiKey.createdAt,
     lastUsedAt: apiKey.lastUsedAt,

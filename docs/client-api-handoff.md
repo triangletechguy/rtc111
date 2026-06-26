@@ -4,12 +4,14 @@ Use this document when you need to give a customer/client API access so they can
 
 ## What You Provide To The Client
 
-Share these values with the client's backend team:
+Share these values with the client's app and backend teams:
 
 ```text
 RTC_API_BASE_URL=https://funint.online
 RTC_APP_ID=<client_app_id>
-RTC_CLIENT_API_KEY=<client_api_key>
+RTC_APP_KEY=<client_app_key>
+RTC_SERVER_SECRET=<backend_only_server_secret>
+RTC_CLIENT_API_KEY=<backend_only_server_secret>
 ```
 
 Share these docs:
@@ -30,9 +32,9 @@ database/internal storage access
 other clients' API keys
 ```
 
-The client API key is for the client's backend only. It must not be hard-coded inside an Android APK, iOS app, browser app, or desktop app.
+`RTC_APP_ID` and `RTC_APP_KEY` are SDK initialization values. `RTC_SERVER_SECRET` / `RTC_CLIENT_API_KEY` is for the client's backend only and must not be hard-coded inside an Android APK, iOS app, browser app, or desktop app.
 
-## Generate A Client API Key
+## Generate An RTC Project
 
 Run this from your platform/admin environment:
 
@@ -44,7 +46,7 @@ curl -X POST https://funint.online/admin/apps \
     "name": "Client Company App",
     "package_name": "com.client.app",
     "allowed_origins": ["https://client.example"],
-    "key_label": "Client production backend key"
+    "key_label": "Client production server secret"
   }'
 ```
 
@@ -54,28 +56,36 @@ Give the client these response fields:
 {
   "app": {
     "app_id": "client-company-app",
+    "app_key": "app_...",
     "name": "Client Company App"
   },
+  "server_secret": "rtc_...",
   "api_key": "rtc_..."
 }
 ```
 
-The client should store `api_key` as a backend secret, for example:
+The client app initializes the SDK with `app_id` and `app_key`. The client backend stores `server_secret` / `api_key` as a backend secret:
 
 ```text
+RTC_APP_ID=client-company-app
+RTC_APP_KEY=app_...
+RTC_SERVER_SECRET=rtc_...
 RTC_CLIENT_API_KEY=rtc_...
 RTC_API_BASE_URL=https://funint.online
 ```
 
 ## Client Integration Flow
 
-The client backend should follow this flow:
+The client should follow this SDK flow:
 
-1. Sync the app user with `POST /client/users/sync`.
-2. Create or update the RTC room with `POST /client/rooms`.
-3. Issue a short-lived RTC token with `POST /client/rtc/token`.
-4. Return only the RTC token and room metadata to the client app.
-5. The app uses that token in the Android AAR SDK, browser SDK, or custom Socket.IO/WebRTC client.
+1. Developer creates an RTC project in the admin dashboard.
+2. RTC Platform returns App ID, App Key, and backend-only server secret.
+3. Developer installs the SDK in the mobile or web app.
+4. Client app initializes the SDK with App ID and App Key.
+5. Client app asks the client's backend server for an RTC token.
+6. The backend authenticates the app user and calls `POST /client/rtc/token` with the server secret.
+7. Client app uses the token to join an RTC room/channel.
+8. Audio, video, chat, and signaling start after the room join is accepted.
 
 The client app should not call your `/client/*` APIs directly unless it is a trusted server-side app.
 
@@ -91,9 +101,11 @@ That endpoint authenticates the app user using the client's normal login/session
 
 ```bash
 curl -X POST https://funint.online/client/rtc/token \
-  -H "Authorization: Bearer RTC_CLIENT_API_KEY" \
+  -H "Authorization: Bearer RTC_SERVER_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
+    "app_id": "client-company-app",
+    "app_key": "app_...",
     "external_user_id": "user-123",
     "room_id": "support-room-1",
     "role": "publisher",
@@ -107,7 +119,9 @@ Then the client backend returns a safe app-facing response:
 ```json
 {
   "accessToken": "JWT_TOKEN",
-  "expiresAt": "2026-06-25T15:00:00.000Z",
+  "expiresAt": "<ISO_EXPIRES_AT>",
+  "appId": "client-company-app",
+  "appKey": "app_...",
   "roomId": "support-room-1",
   "rtcMode": "video"
 }
@@ -291,12 +305,12 @@ curl -X POST https://funint.online/client/rtc/token/revoke \
 
 Before handing integration details to the client:
 
-1. Create a dedicated client app.
-2. Create a dedicated client API key.
-3. Confirm `GET /client/me` works with that key.
+1. Create a dedicated RTC project.
+2. Save its App ID, App Key, and backend-only server secret.
+3. Confirm `GET /client/me` works with that server secret.
 4. Confirm a token can be issued for a test user and room.
-5. Share only `RTC_API_BASE_URL`, `RTC_APP_ID`, and `RTC_CLIENT_API_KEY`.
-6. Tell the client to keep `RTC_CLIENT_API_KEY` on their backend only.
+5. Share `RTC_API_BASE_URL`, `RTC_APP_ID`, `RTC_APP_KEY`, and the backend-only `RTC_SERVER_SECRET`.
+6. Tell the client to keep `RTC_SERVER_SECRET` / `RTC_CLIENT_API_KEY` on their backend only.
 7. Share the Android AAR only if they are building an Android SDK integration.
 
 ## Support Notes For The Client
@@ -307,7 +321,7 @@ Common errors:
 401 Valid client API key is required
 ```
 
-The backend did not send `Authorization: Bearer RTC_CLIENT_API_KEY`, or the key was revoked.
+The backend did not send `Authorization: Bearer RTC_SERVER_SECRET`, or the server secret was revoked.
 
 ```text
 app_name or external_user_id is required

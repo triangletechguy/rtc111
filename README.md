@@ -3,9 +3,9 @@
 Local RTC service platform with:
 
 - Express API for client verification, user sync, room creation, RTC token issuing, session start, session end, and usage billing.
-- Admin API for creating client apps, issuing per-client API keys, and viewing company-wise used-minute billing.
+- Admin API for creating RTC projects, issuing App ID/App Key plus backend server secrets, and viewing company-wise used-minute billing.
 - Socket.IO signaling for authenticated WebRTC peers.
-- In-memory client app, API key, room, participant, media, and session state for local development.
+- In-memory RTC project, server secret, room, participant, media, and session state for local development.
 - Browser SDK and admin dashboard for generating RTC access tokens by app name, viewing company billing, and checking RTC API connection status.
 - Android WebRTC SDK wrapper for connect, join, leave, one-to-one voice/video calls, group voice/video chat, solo live, live PK state, MediaProjection screen share, chat/messages/comments with replies and AI filtering, voice/image messages, gifts, room/admin/moderation settings, video effects/beauty/stickers/makeup state, mute audio, noise cancellation, toggle video, speakerphone, signaling, security events, and stream callbacks.
 
@@ -20,16 +20,18 @@ npm run dev
 Backend defaults:
 
 - API URL: `http://localhost:4000`
+- App ID: `local-rtc-client`
+- App Key: `rtc-dev-app-key`
 - Platform admin key: `rtc-admin-dev-key`
-- Client API key: `rtc-dev-api-key`
+- Backend server secret / client API key: `rtc-dev-api-key`
 - Token secret: `rtc-dev-secret-change-me`
 - Optional billing rate: `RTC_BILLING_RATE_PER_MINUTE` (defaults to `0`; no payment gateway is used)
 
-For real deployments set `RTC_ADMIN_KEY`, `RTC_API_KEY`, `RTC_TOKEN_SECRET`, and optionally `RTC_BILLING_RATE_PER_MINUTE`.
+For real deployments set `RTC_ADMIN_KEY`, `RTC_APP_KEY`, `RTC_API_KEY`, `RTC_TOKEN_SECRET`, and optionally `RTC_BILLING_RATE_PER_MINUTE`.
 
 ## Client App Integration
 
-Create a client app and API key:
+Create an RTC project and server secret:
 
 ```bash
 curl -X POST https://funint.online/admin/apps \
@@ -38,7 +40,7 @@ curl -X POST https://funint.online/admin/apps \
   -d '{"name":"Client Android App","package_name":"com.client.app"}'
 ```
 
-The client's backend uses the returned `api_key` to sync users, create rooms, and issue short-lived RTC tokens. The Android APK should receive only the RTC access token, not the client API key.
+The response includes `app_id`, `app_key`, and a backend-only `server_secret`/`api_key`. The client app initializes the SDK with `app_id` and `app_key`, then asks the client's backend for a short-lived RTC token. The backend uses the server secret to call the RTC Platform token API. Mobile and browser apps should never receive the server secret.
 
 Full client/API/Android flow: [docs/client-api.md](docs/client-api.md).
 Client API handoff guide: [docs/client-api-handoff.md](docs/client-api-handoff.md).
@@ -76,7 +78,7 @@ Admin endpoints:
 All `/client/*` endpoints require:
 
 ```http
-Authorization: Bearer <CLIENT_API_KEY>
+Authorization: Bearer <RTC_SERVER_SECRET>
 ```
 
 Supported endpoints:
