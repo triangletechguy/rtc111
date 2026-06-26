@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   RTC_DEFAULT_APP_ID,
+  RTC_DEFAULT_ADMIN_KEY,
   RTC_DEFAULT_APP_KEY,
   createAdminApp,
   createAdminAppKey,
@@ -15,9 +16,12 @@ import "./App.css";
 const DEFAULT_APP_NAME = "Test-rtc";
 const DEFAULT_CLIENT_APP_NAME = "Hapi App";
 const DEFAULT_CLIENT_PACKAGE_NAME = "com.example.hapi";
+const ADMIN_KEY_STORAGE_KEY = "rtc_admin_key";
 
 export default function App() {
   const [appName, setAppName] = useState(DEFAULT_APP_NAME);
+  const [adminKey, setAdminKey] = useState(() => readStoredAdminKey());
+  const [adminKeyInput, setAdminKeyInput] = useState(() => readStoredAdminKey());
   const [accessToken, setAccessToken] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
@@ -27,7 +31,7 @@ export default function App() {
   const [billingStatus, setBillingStatus] = useState("");
   const [isBillingLoading, setIsBillingLoading] = useState(false);
   const [rtcConnectionStatus, setRtcConnectionStatus] = useState("idle");
-  const [activeTab, setActiveTab] = useState("token");
+  const [activeTab, setActiveTab] = useState("client-keys");
   const [clientApps, setClientApps] = useState([]);
   const [clientKeyStatus, setClientKeyStatus] = useState("");
   const [isClientAppsLoading, setIsClientAppsLoading] = useState(false);
@@ -52,13 +56,25 @@ export default function App() {
     void loadClientApps();
   }, []);
 
-  async function loadBilling() {
+  function handleAdminKeySubmit(event) {
+    event.preventDefault();
+
+    const nextAdminKey = adminKeyInput.trim() || RTC_DEFAULT_ADMIN_KEY;
+
+    setAdminKey(nextAdminKey);
+    writeStoredAdminKey(nextAdminKey);
+    setClientKeyStatus("Admin key applied.");
+    void loadBilling(nextAdminKey);
+    void loadClientApps(nextAdminKey);
+  }
+
+  async function loadBilling(adminKeyOverride = adminKey) {
     setIsBillingLoading(true);
     setBillingStatus("");
     setRtcConnectionStatus("connecting");
 
     try {
-      const response = await getAdminBilling();
+      const response = await getAdminBilling({ adminKey: getActiveAdminKey(adminKeyOverride) });
       const rows = readBillingRows(response);
 
       setBillingRows(rows);
@@ -131,13 +147,15 @@ export default function App() {
     }
   }
 
-  async function loadClientApps() {
+  async function loadClientApps(adminKeyOverride = adminKey) {
+    const requestAdminKey = getActiveAdminKey(adminKeyOverride);
+
     setIsClientAppsLoading(true);
     setClientKeyStatus("");
     setRtcConnectionStatus("connecting");
 
     try {
-      const response = await getAdminApps();
+      const response = await getAdminApps({ adminKey: requestAdminKey });
       const apps = readClientApps(response);
       const appsWithKeys = await Promise.all(
         apps.map(async (app) => {
@@ -151,7 +169,7 @@ export default function App() {
           }
 
           try {
-            const details = await getAdminApp({ appId: currentAppId });
+            const details = await getAdminApp({ appId: currentAppId, adminKey: requestAdminKey });
 
             return {
               ...(details.app ?? app),
@@ -197,7 +215,9 @@ export default function App() {
     setRtcConnectionStatus("connecting");
 
     try {
+      const requestAdminKey = getActiveAdminKey(adminKey);
       const response = await createAdminApp({
+        adminKey: requestAdminKey,
         name,
         packageName: newClientPackageName.trim(),
         allowedOrigins: parseAllowedOrigins(newClientAllowedOrigins),
@@ -207,7 +227,7 @@ export default function App() {
       setGeneratedClientKey(readGeneratedClientKey(response));
       setClientKeyStatus("RTC project credentials created.");
       setRtcConnectionStatus("online");
-      await loadClientApps();
+      await loadClientApps(requestAdminKey);
     } catch (event) {
       const message = getErrorMessage(event);
 
@@ -232,7 +252,9 @@ export default function App() {
     setRtcConnectionStatus("connecting");
 
     try {
+      const requestAdminKey = getActiveAdminKey(adminKey);
       const response = await createAdminAppKey({
+        adminKey: requestAdminKey,
         appId: currentAppId,
         label: keyLabelsByApp[currentAppId]?.trim() || "Rotated server secret",
       });
@@ -240,7 +262,7 @@ export default function App() {
       setGeneratedClientKey(readGeneratedClientKey(response));
       setClientKeyStatus("New server secret generated.");
       setRtcConnectionStatus("online");
-      await loadClientApps();
+      await loadClientApps(requestAdminKey);
     } catch (event) {
       const message = getErrorMessage(event);
 
@@ -273,7 +295,9 @@ export default function App() {
     setRtcConnectionStatus("connecting");
 
     try {
-      await deleteAdminApp({ appId: currentAppId });
+      const requestAdminKey = getActiveAdminKey(adminKey);
+
+      await deleteAdminApp({ appId: currentAppId, adminKey: requestAdminKey });
       setGeneratedClientKey((key) => (key?.appId === currentAppId ? null : key));
       setKeyLabelsByApp((labels) => {
         const nextLabels = { ...labels };
@@ -282,8 +306,8 @@ export default function App() {
       });
       setClientKeyStatus(`${appNameToDelete} deleted.`);
       setRtcConnectionStatus("online");
-      await loadClientApps();
-      await loadBilling();
+      await loadClientApps(requestAdminKey);
+      await loadBilling(requestAdminKey);
     } catch (event) {
       const message = getErrorMessage(event);
 
@@ -339,9 +363,24 @@ export default function App() {
             <h1>RTC Admin Panel</h1>
             <p>Company usage billing is calculated from used RTC minutes. Payment gateway is disabled.</p>
           </div>
-          <div className={`connection-indicator ${rtcConnectionStatus}`} role="status" aria-live="polite">
-            <span aria-hidden="true" />
-            {getConnectionLabel(rtcConnectionStatus)}
+          <div className="dashboard-header-actions">
+            <form className="admin-auth-form" onSubmit={handleAdminKeySubmit}>
+              <label htmlFor="admin-key">Admin key</label>
+              <div className="admin-auth-row">
+                <input
+                  id="admin-key"
+                  type="password"
+                  value={adminKeyInput}
+                  onChange={(event) => setAdminKeyInput(event.target.value)}
+                  autoComplete="off"
+                />
+                <button type="submit">Apply</button>
+              </div>
+            </form>
+            <div className={`connection-indicator ${rtcConnectionStatus}`} role="status" aria-live="polite">
+              <span aria-hidden="true" />
+              {getConnectionLabel(rtcConnectionStatus)}
+            </div>
           </div>
         </header>
 
@@ -840,6 +879,34 @@ function parseAllowedOrigins(value) {
     .split(/[\n,]+/g)
     .map((origin) => origin.trim())
     .filter(Boolean);
+}
+
+function getActiveAdminKey(value) {
+  return value?.trim() || RTC_DEFAULT_ADMIN_KEY;
+}
+
+function readStoredAdminKey() {
+  if (typeof window === "undefined") {
+    return RTC_DEFAULT_ADMIN_KEY;
+  }
+
+  try {
+    return window.localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || RTC_DEFAULT_ADMIN_KEY;
+  } catch {
+    return RTC_DEFAULT_ADMIN_KEY;
+  }
+}
+
+function writeStoredAdminKey(value) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(ADMIN_KEY_STORAGE_KEY, value);
+  } catch {
+    // Ignore storage failures; the in-memory key still applies for this session.
+  }
 }
 
 function readNumber(value) {

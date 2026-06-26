@@ -18,7 +18,23 @@ http://funint.online, http://www.funint.online {
 		reverse_proxy 127.0.0.1:4000
 	}
 
-	handle /admin/* {
+	handle /admin {
+		header Cache-Control "no-cache"
+		rewrite * /index.html
+		file_server
+	}
+
+	handle /admin/ {
+		header Cache-Control "no-cache"
+		rewrite * /index.html
+		file_server
+	}
+
+	handle /admin/apps* {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle /admin/billing* {
 		reverse_proxy 127.0.0.1:4000
 	}
 
