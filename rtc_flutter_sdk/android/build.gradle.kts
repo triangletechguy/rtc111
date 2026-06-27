@@ -77,6 +77,7 @@ kotlin {
 
 dependencies {
     implementation("com.rtcone:rtc-default-sdk:0.1.0")
+    implementation("io.github.webrtc-sdk:android:144.7559.09")
     implementation("io.socket:socket.io-client:2.1.2") {
         exclude(group = "org.json", module = "json")
     }

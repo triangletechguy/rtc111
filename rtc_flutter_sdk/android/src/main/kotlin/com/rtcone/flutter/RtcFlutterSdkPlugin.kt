@@ -4,12 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Matrix
-import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
-import android.view.TextureView
 import android.view.View
 import com.rtcone.sdk.RtcDashboardSession
 import com.rtcone.sdk.RtcServiceSdk
@@ -23,13 +19,9 @@ import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import java.util.Locale
-import kotlin.math.abs
-import org.webrtc.EglBase
-import org.webrtc.EglRenderer
-import org.webrtc.GlRectDrawer
 import org.webrtc.MediaStream
-import org.webrtc.VideoFrame
-import org.webrtc.VideoSink
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 
 class RtcFlutterSdkPlugin :
     FlutterPlugin,
@@ -371,8 +363,8 @@ class RtcFlutterSdkPlugin :
     }
 
     private fun releaseSession() {
-        localVideoViewFactory?.detachFromSession(releaseRenderer = false)
-        remoteVideoViewFactory?.detachFromSession(releaseRenderer = false)
+        localVideoViewFactory?.detachFromSession(releaseRenderer = true)
+        remoteVideoViewFactory?.detachFromSession(releaseRenderer = true)
         session?.leaveRoom()
         session?.release()
         session = null
@@ -508,9 +500,8 @@ private class RtcLocalVideoPlatformView(
     creationParams: Map<*, *>?,
     private val onDispose: (RtcLocalVideoPlatformView) -> Unit
 ) : PlatformView {
-    private val renderer = RtcTextureVideoRenderer(
+    private val renderer = RtcSurfaceVideoRenderer(
         context = context,
-        rendererName = "RtcLocalVideoRenderer",
         mirror = creationParams.booleanParam("mirror", defaultValue = true),
         fit = creationParams.stringParam("fit", defaultValue = "cover")
     )
@@ -523,21 +514,22 @@ private class RtcLocalVideoPlatformView(
             return
         }
 
-        detachFromSdk(releaseRenderer = false)
+        detachFromSdk(releaseRenderer = attachedSdk != null)
         attachedSdk = sdk
 
-        if (sdk != null) {
-            sdk.attachLocalVideoSink(renderer)
-        }
+        sdk?.attachLocalRenderer(renderer)
     }
 
     fun detachFromSdk(releaseRenderer: Boolean = false) {
-        attachedSdk?.detachLocalVideoSink(renderer)
-        attachedSdk = null
+        val currentSdk = attachedSdk
 
-        if (releaseRenderer) {
+        if (currentSdk != null) {
+            currentSdk.detachLocalRenderer(renderer, releaseRenderer)
+        } else if (releaseRenderer) {
             renderer.release()
         }
+
+        attachedSdk = null
     }
 
     override fun dispose() {
@@ -551,9 +543,8 @@ private class RtcRemoteVideoPlatformView(
     creationParams: Map<*, *>?,
     private val onDispose: (RtcRemoteVideoPlatformView) -> Unit
 ) : PlatformView {
-    private val renderer = RtcTextureVideoRenderer(
+    private val renderer = RtcSurfaceVideoRenderer(
         context = context,
-        rendererName = "RtcRemoteVideoRenderer",
         mirror = creationParams.booleanParam("mirror", defaultValue = false),
         fit = creationParams.stringParam("fit", defaultValue = "cover")
     )
@@ -566,21 +557,22 @@ private class RtcRemoteVideoPlatformView(
             return
         }
 
-        detachFromSdk(releaseRenderer = false)
+        detachFromSdk(releaseRenderer = attachedSdk != null)
         attachedSdk = sdk
 
-        if (sdk != null) {
-            sdk.attachRemoteVideoSink(renderer)
-        }
+        sdk?.attachRemoteRenderer(renderer)
     }
 
     fun detachFromSdk(releaseRenderer: Boolean = false) {
-        attachedSdk?.detachRemoteVideoSink(renderer)
-        attachedSdk = null
+        val currentSdk = attachedSdk
 
-        if (releaseRenderer) {
+        if (currentSdk != null) {
+            currentSdk.detachRemoteRenderer(renderer, releaseRenderer)
+        } else if (releaseRenderer) {
             renderer.release()
         }
+
+        attachedSdk = null
     }
 
     override fun dispose() {
@@ -589,127 +581,24 @@ private class RtcRemoteVideoPlatformView(
     }
 }
 
-private class RtcTextureVideoRenderer(
+private class RtcSurfaceVideoRenderer(
     context: Context,
-    rendererName: String,
     mirror: Boolean,
     fit: String
-) : TextureView(context), TextureView.SurfaceTextureListener, VideoSink {
-    private val eglBase = EglBase.create()
-    private val eglRenderer = EglRenderer(rendererName)
-    private val contentFit = fit.lowercase(Locale.US)
-    private val textureMatrix = Matrix()
-
-    @Volatile
-    private var released = false
-
-    @Volatile
-    private var frameAspectRatio = 0f
-
+) : SurfaceViewRenderer(context) {
     init {
-        setBackgroundColor(Color.BLACK)
-        isOpaque = true
-        surfaceTextureListener = this
-        eglRenderer.init(eglBase.eglBaseContext, EglBase.CONFIG_PLAIN, GlRectDrawer())
-        eglRenderer.setMirror(mirror)
-    }
-
-    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-        if (released) {
-            return
-        }
-
-        eglRenderer.createEglSurface(surface)
-        updateRendererLayout(width, height)
-    }
-
-    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        updateRendererLayout(width, height)
-    }
-
-    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-        if (!released) {
-            eglRenderer.releaseEglSurface {}
-        }
-        return true
-    }
-
-    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
-
-    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
-        super.onSizeChanged(width, height, oldWidth, oldHeight)
-        updateRendererLayout(width, height)
-    }
-
-    override fun onFrame(frame: VideoFrame) {
-        if (released) {
-            return
-        }
-
-        val rotatedHeight = frame.rotatedHeight
-        if (rotatedHeight > 0) {
-            val nextAspectRatio = frame.rotatedWidth.toFloat() / rotatedHeight.toFloat()
-            if (nextAspectRatio > 0f && abs(nextAspectRatio - frameAspectRatio) > 0.01f) {
-                frameAspectRatio = nextAspectRatio
-                post { updateRendererLayout(width, height) }
+        setMirror(mirror)
+        setEnableHardwareScaler(true)
+        setScalingType(
+            when (fit.lowercase(Locale.US)) {
+                "contain" -> RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                else -> RendererCommon.ScalingType.SCALE_ASPECT_FILL
             }
+        )
+        holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+        if (mirror) {
+            setZOrderMediaOverlay(true)
         }
-
-        eglRenderer.onFrame(frame)
-    }
-
-    fun release() {
-        if (released) {
-            return
-        }
-
-        released = true
-        surfaceTextureListener = null
-        eglRenderer.release()
-        eglBase.release()
-    }
-
-    private fun updateRendererLayout(width: Int, height: Int) {
-        if (released || width <= 0 || height <= 0) {
-            return
-        }
-
-        val viewAspectRatio = width.toFloat() / height.toFloat()
-        val layoutAspectRatio = when {
-            contentFit == "contain" && frameAspectRatio > 0f -> frameAspectRatio
-            viewAspectRatio > 0f -> viewAspectRatio
-            else -> frameAspectRatio
-        }
-
-        if (layoutAspectRatio > 0f) {
-            eglRenderer.setLayoutAspectRatio(layoutAspectRatio)
-        }
-
-        updateTextureTransform(width, height, viewAspectRatio)
-    }
-
-    private fun updateTextureTransform(width: Int, height: Int, viewAspectRatio: Float) {
-        textureMatrix.reset()
-
-        if (contentFit == "contain" && frameAspectRatio > 0f && viewAspectRatio > 0f) {
-            if (frameAspectRatio > viewAspectRatio) {
-                textureMatrix.setScale(
-                    1f,
-                    viewAspectRatio / frameAspectRatio,
-                    width / 2f,
-                    height / 2f
-                )
-            } else {
-                textureMatrix.setScale(
-                    frameAspectRatio / viewAspectRatio,
-                    1f,
-                    width / 2f,
-                    height / 2f
-                )
-            }
-        }
-
-        setTransform(textureMatrix)
     }
 }
 
