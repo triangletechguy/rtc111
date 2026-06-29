@@ -1,0 +1,53 @@
+# TalkEachOther Mobile
+
+Flutter mobile client for the TalkEachOther RTC platform.
+
+The migration target is a native Flutter app that matches the rtc-enterprise
+web/mobile UI and functions without depending on the web frontend at runtime.
+See [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md) for the migration contract and
+step-by-step parity plan.
+
+The default mobile entry point opens the native Flutter shell. The mobile app
+does not include a WebView frontend wrapper.
+
+For client-company mobile integration, see [SDK_INTEGRATION.md](SDK_INTEGRATION.md)
+and the API-only gateway SDK at `lib/sdk/rtc_gateway_sdk.dart`.
+
+## Run Locally
+
+From the `mobile` directory:
+
+```bash
+flutter pub get
+flutter run \
+  --dart-define=API_URL=http://10.0.2.2:8000/api
+```
+
+Android emulators use `10.0.2.2` to reach services running on the host machine.
+For a physical Android phone on the same network, start the backend with
+`HOST=0.0.0.0` and build with the host computer LAN IP instead:
+
+```bash
+LAN_IP=$(hostname -I | awk '{print $1}')
+HOST=0.0.0.0 npm --prefix ../backend start
+flutter run -d <device-id> \
+  --dart-define=API_URL=http://$LAN_IP:8000/api
+```
+
+Use production HTTPS API URLs for release builds. The app derives RTC signaling
+and network config from this API URL through `/api/rtc`, so the client does not
+need to provide a separate signaling URL or RTC provider token.
+
+## Build API-Only APK
+
+```bash
+API_URL=https://funint.online/api \
+RTC_GATEWAY_CLIENT_APP_ID=teo_live_accenture \
+bash mobile/scripts/build_api_only_apk.sh
+```
+
+The copied APK is written to:
+
+```text
+mobile/build/api-only/rtc-service-api-only.apk
+```
