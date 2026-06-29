@@ -2611,19 +2611,23 @@ class RtcServiceSdk(
             val tokenInfo = parseAccessToken(accessToken)
             val normalizedExpectedAppId = expectedAppId?.trim()?.takeIf { it.isNotBlank() }
             val normalizedExpectedAppKey = expectedAppKey?.trim()?.takeIf { it.isNotBlank() }
+            val tokenAppId = tokenInfo.appId?.trim()?.takeIf { it.isNotBlank() }
+            val tokenAppKey = tokenInfo.appKey?.trim()?.takeIf { it.isNotBlank() }
 
             if (
                 normalizedExpectedAppId != null &&
-                !tokenInfo.appId.isNullOrBlank() &&
-                tokenInfo.appId != normalizedExpectedAppId
+                tokenAppId != null &&
+                tokenAppId != normalizedExpectedAppId
             ) {
-                throw IllegalArgumentException("RTC access token app_id does not match the initialized App ID")
+                throw IllegalArgumentException(
+                    "RTC access token app_id \"$tokenAppId\" does not match initialized App ID \"$normalizedExpectedAppId\""
+                )
             }
 
             if (
                 normalizedExpectedAppKey != null &&
-                !tokenInfo.appKey.isNullOrBlank() &&
-                tokenInfo.appKey != normalizedExpectedAppKey
+                tokenAppKey != null &&
+                tokenAppKey != normalizedExpectedAppKey
             ) {
                 throw IllegalArgumentException("RTC access token app_key does not match the initialized App Key")
             }
