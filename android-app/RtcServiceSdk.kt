@@ -36,6 +36,9 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 import org.webrtc.audio.AudioDeviceModule
+import org.webrtc.audio.AudioProcessingComponentOptions
+import org.webrtc.audio.AudioProcessingMode
+import org.webrtc.audio.AudioProcessingOptions
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.charset.Charset
 import java.util.Locale
@@ -173,14 +176,17 @@ class RtcServiceSdk(
                 signalingUrl: String = RtcServiceSdk.DEFAULT_SIGNALING_URL,
                 iceServers: List<PeerConnection.IceServer> = RtcServiceSdk.defaultIceServers(),
                 appId: String? = null,
-                appKey: String? = null
+                appKey: String? = null,
+                rtcMode: String? = null
             ): Config {
                 val tokenInfo = RtcServiceSdk.parseAccessToken(accessToken)
                 val resolvedRoomId = roomId?.takeIf { it.isNotBlank() }
                     ?: tokenInfo.roomId?.takeIf { it.isNotBlank() }
                     ?: throw IllegalArgumentException("Room id is required when the RTC token does not include roomId")
+                val resolvedRtcMode = rtcMode?.trim()?.takeIf { it.isNotBlank() }
+                    ?: tokenInfo.rtcMode
 
-                val enableVideo = RtcServiceSdk.shouldEnableVideo(tokenInfo)
+                val enableVideo = RtcServiceSdk.shouldEnableVideo(tokenInfo, resolvedRtcMode)
                 val enableAudio = RtcServiceSdk.shouldEnableAudio(tokenInfo)
 
                 return Config(
@@ -190,7 +196,7 @@ class RtcServiceSdk(
                     enableAudio = enableAudio,
                     enableVideo = enableVideo,
                     enableNoiseCancellation = enableAudio,
-                    rtcMode = tokenInfo.rtcMode ?: if (enableVideo) "video" else "voice",
+                    rtcMode = resolvedRtcMode ?: if (enableVideo) "video" else "voice",
                     iceServers = iceServers,
                     appId = appId ?: RtcServiceSdk.DEFAULT_APP_ID,
                     appKey = appKey ?: RtcServiceSdk.DEFAULT_APP_KEY
@@ -747,6 +753,8 @@ class RtcServiceSdk(
             "room:join",
             JSONObject()
                 .put("roomId", roomId)
+                .put("rtcMode", config.rtcMode)
+                .put("rtc_mode", config.rtcMode)
                 .put("micEnabled", micEnabled)
                 .put("cameraEnabled", cameraEnabled)
                 .put("noiseCancellationEnabled", noiseCancellationEnabled)
@@ -827,10 +835,19 @@ class RtcServiceSdk(
     }
 
     fun setNoiseCancellationEnabled(enabled: Boolean) {
+        val changed = noiseCancellationEnabled != enabled
         noiseCancellationEnabled = enabled
 
         if (localStream != null && config.enableAudio) {
-            replaceLocalAudioTrack()
+            val applied = audioTrack?.let { applyAudioProcessingOptions(it) } == true
+
+            if (!applied && changed) {
+                replaceLocalAudioTrack()
+            }
+
+            if (!applied && enabled) {
+                listener.onError("Noise cancellation is not available on this Android audio path")
+            }
         }
 
         emitMediaState()
@@ -1958,7 +1975,7 @@ class RtcServiceSdk(
                     when (state) {
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> updateConnectionIndicator(ConnectionIndicator.PEER_CONNECTED)
-                        PeerConnection.IceConnectionState.FAILED -> updateConnectionIndicator(ConnectionIndicator.FAILED)
+                        PeerConnection.IceConnectionState.FAILED -> handlePeerConnectionFailed(peerId)
                         PeerConnection.IceConnectionState.DISCONNECTED -> updateConnectionIndicator(ConnectionIndicator.RECONNECTING)
                         PeerConnection.IceConnectionState.CLOSED -> updateConnectionIndicator(
                             if (currentRoomId == null) ConnectionIndicator.CONNECTED else ConnectionIndicator.IN_ROOM
@@ -2008,14 +2025,19 @@ class RtcServiceSdk(
                     when (newState) {
                         PeerConnection.PeerConnectionState.CONNECTED -> updateConnectionIndicator(ConnectionIndicator.PEER_CONNECTED)
                         PeerConnection.PeerConnectionState.CONNECTING -> updateConnectionIndicator(ConnectionIndicator.PEER_CONNECTING)
-                        PeerConnection.PeerConnectionState.FAILED -> updateConnectionIndicator(ConnectionIndicator.FAILED)
+                        PeerConnection.PeerConnectionState.FAILED -> handlePeerConnectionFailed(peerId)
                         PeerConnection.PeerConnectionState.DISCONNECTED -> updateConnectionIndicator(ConnectionIndicator.RECONNECTING)
                         PeerConnection.PeerConnectionState.CLOSED -> updateConnectionIndicator(
                             if (currentRoomId == null) ConnectionIndicator.CONNECTED else ConnectionIndicator.IN_ROOM
                         )
                         else -> {}
                     }
-                    newState?.let { listener.onConnectionStateChanged(it) }
+                    if (
+                        newState != PeerConnection.PeerConnectionState.FAILED &&
+                        newState != PeerConnection.PeerConnectionState.CLOSED
+                    ) {
+                        newState?.let { listener.onConnectionStateChanged(it) }
+                    }
                 }
             }
         ) ?: throw IllegalStateException("Unable to create PeerConnection")
@@ -2038,6 +2060,17 @@ class RtcServiceSdk(
         stream.videoTracks.forEach { attachRemoteVideoTrack(it) }
         listener.onRemoteStream(stream)
         listener.onRemoteStreamForPeer(peerId, stream)
+    }
+
+    private fun handlePeerConnectionFailed(peerId: String) {
+        closePeerConnection(peerId)
+        updateConnectionIndicator(
+            when {
+                currentRoomId == null -> ConnectionIndicator.CONNECTED
+                peerConnections.isEmpty() -> ConnectionIndicator.WAITING_FOR_PEER
+                else -> ConnectionIndicator.PEER_CONNECTED
+            }
+        )
     }
 
     private fun attachRemoteVideoTrack(track: VideoTrack) {
@@ -2160,7 +2193,7 @@ class RtcServiceSdk(
 
         return JavaAudioDeviceModule.builder(context)
             .setUseHardwareAcousticEchoCanceler(JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported())
-            .setUseHardwareNoiseSuppressor(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
+            .setUseHardwareNoiseSuppressor(false)
             .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
                 override fun onWebRtcAudioRecordInitError(errorMessage: String) {
                     listener.onError("Microphone init failed: $errorMessage")
@@ -2207,8 +2240,49 @@ class RtcServiceSdk(
 
         audioSource = source
         audioTrack = track
+        if (!applyAudioProcessingOptions(track) && noiseCancellationEnabled) {
+            listener.onError("Noise cancellation is not available on this Android audio path")
+        }
         track.setEnabled(micEnabled)
         return track
+    }
+
+    private fun applyAudioProcessingOptions(track: AudioTrack): Boolean {
+        if (setAudioProcessingOptions(track, preferSoftwareNoiseSuppression = true)) {
+            return true
+        }
+
+        return setAudioProcessingOptions(track, preferSoftwareNoiseSuppression = false)
+    }
+
+    private fun setAudioProcessingOptions(
+        track: AudioTrack,
+        preferSoftwareNoiseSuppression: Boolean
+    ): Boolean {
+        return try {
+            track.setAudioProcessingOptions(
+                createAudioProcessingOptions(preferSoftwareNoiseSuppression)
+            ).isSuccess()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun createAudioProcessingOptions(
+        preferSoftwareNoiseSuppression: Boolean
+    ): AudioProcessingOptions {
+        val noiseMode = if (preferSoftwareNoiseSuppression) {
+            AudioProcessingMode.SOFTWARE
+        } else {
+            AudioProcessingMode.AUTOMATIC
+        }
+
+        return AudioProcessingOptions(
+            AudioProcessingComponentOptions(true, AudioProcessingMode.AUTOMATIC),
+            AudioProcessingComponentOptions(noiseCancellationEnabled, noiseMode),
+            AudioProcessingComponentOptions(true, AudioProcessingMode.AUTOMATIC),
+            AudioProcessingComponentOptions(noiseCancellationEnabled, AudioProcessingMode.AUTOMATIC)
+        )
     }
 
     private fun replaceLocalAudioTrack() {
@@ -2253,10 +2327,10 @@ class RtcServiceSdk(
 
     private fun createAudioConstraints(): MediaConstraints {
         return MediaConstraints().apply {
-            optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-            optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-            optional.add(MediaConstraints.KeyValuePair("googHighpassFilter", noiseCancellationEnabled.toString()))
-            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", noiseCancellationEnabled.toString()))
+            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", noiseCancellationEnabled.toString()))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", noiseCancellationEnabled.toString()))
         }
     }
 
@@ -2571,12 +2645,21 @@ class RtcServiceSdk(
         @JvmStatic
         fun requiredAndroidPermissionsForToken(accessToken: String): List<String> {
             val tokenInfo = parseAccessToken(accessToken)
+            return requiredAndroidPermissionsForToken(accessToken, tokenInfo.rtcMode)
+        }
+
+        @JvmStatic
+        fun requiredAndroidPermissionsForToken(
+            accessToken: String,
+            rtcMode: String?
+        ): List<String> {
+            val tokenInfo = parseAccessToken(accessToken)
             return buildList {
                 if (shouldEnableAudio(tokenInfo)) {
                     add(Manifest.permission.RECORD_AUDIO)
                 }
 
-                if (shouldEnableVideo(tokenInfo)) {
+                if (shouldEnableVideo(tokenInfo, rtcMode)) {
                     add(Manifest.permission.CAMERA)
                 }
             }.distinct()
@@ -2589,14 +2672,16 @@ class RtcServiceSdk(
             accessToken: String,
             roomId: String,
             listener: Listener,
-            signalingUrl: String = DEFAULT_SIGNALING_URL
+            signalingUrl: String = DEFAULT_SIGNALING_URL,
+            rtcMode: String? = null
         ): RtcServiceSdk {
             return RtcServiceSdk(
                 context = context,
                 config = Config.dashboardToken(
                     signalingUrl = signalingUrl,
                     accessToken = accessToken,
-                    roomId = roomId
+                    roomId = roomId,
+                    rtcMode = rtcMode
                 ),
                 listener = listener
             )
@@ -2608,13 +2693,15 @@ class RtcServiceSdk(
             context: Context,
             accessToken: String,
             listener: Listener,
-            signalingUrl: String = DEFAULT_SIGNALING_URL
+            signalingUrl: String = DEFAULT_SIGNALING_URL,
+            rtcMode: String? = null
         ): RtcServiceSdk {
             return RtcServiceSdk(
                 context = context,
                 config = Config.dashboardToken(
                     signalingUrl = signalingUrl,
-                    accessToken = accessToken
+                    accessToken = accessToken,
+                    rtcMode = rtcMode
                 ),
                 listener = listener
             )
@@ -2628,9 +2715,10 @@ class RtcServiceSdk(
             roomId: String,
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
-            initialEffects: JSONObject? = null
+            initialEffects: JSONObject? = null,
+            rtcMode: String? = null
         ): RtcServiceSdk {
-            return fromDashboardToken(context, accessToken, roomId, listener, signalingUrl)
+            return fromDashboardToken(context, accessToken, roomId, listener, signalingUrl, rtcMode)
                 .also { it.start(initialEffects) }
         }
 
@@ -2641,9 +2729,10 @@ class RtcServiceSdk(
             accessToken: String,
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
-            initialEffects: JSONObject? = null
+            initialEffects: JSONObject? = null,
+            rtcMode: String? = null
         ): RtcServiceSdk {
-            return fromDashboardToken(context, accessToken, listener, signalingUrl)
+            return fromDashboardToken(context, accessToken, listener, signalingUrl, rtcMode)
                 .also { it.start(initialEffects) }
         }
 
@@ -2655,8 +2744,13 @@ class RtcServiceSdk(
             return tokenInfo.hasPermission("publish_audio")
         }
 
-        internal fun shouldEnableVideo(tokenInfo: AccessTokenInfo): Boolean {
-            val rtcMode = tokenInfo.rtcMode ?: return tokenInfo.hasPermission("publish_video")
+        internal fun shouldEnableVideo(
+            tokenInfo: AccessTokenInfo,
+            rtcModeOverride: String? = null
+        ): Boolean {
+            val rtcMode = rtcModeOverride?.trim()?.takeIf { it.isNotBlank() }
+                ?: tokenInfo.rtcMode
+                ?: return tokenInfo.hasPermission("publish_video")
 
             if (isAudioOnlyRtcMode(rtcMode)) {
                 return false

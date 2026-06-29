@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -186,8 +187,12 @@ class RtcFlutterSdkPlugin :
         }
 
         val requiredPermissions = try {
-            RtcDashboardSession.requiredAndroidPermissions(accessToken)
-                .ifEmpty { requiredPermissionsForMode(rtcMode ?: tokenInfo.rtcMode) }
+            if (rtcMode != null) {
+                requiredPermissionsForMode(rtcMode)
+            } else {
+                RtcDashboardSession.requiredAndroidPermissions(accessToken)
+                    .ifEmpty { requiredPermissionsForMode(tokenInfo.rtcMode) }
+            }
         } catch (error: IllegalArgumentException) {
             val message = error.message ?: "Invalid RTC access token"
             result.error("RTC_TOKEN_INVALID", message, null)
@@ -202,6 +207,7 @@ class RtcFlutterSdkPlugin :
             appId = appId,
             appKey = appKey,
             roomId = roomId,
+            rtcMode = rtcMode,
             signalingUrl = signalingUrl,
             speakerOn = speakerOn,
             tokenInfo = tokenInfo,
@@ -236,9 +242,10 @@ class RtcFlutterSdkPlugin :
         result: MethodChannel.Result
     ) {
         val accessToken = call.argument<String>("accessToken").orEmpty()
+        val rtcMode = call.argument<String>("rtcMode")?.trim()?.takeIf { it.isNotBlank() }
 
         try {
-            result.success(RtcDashboardSession.requiredAndroidPermissions(accessToken))
+            result.success(RtcDashboardSession.requiredAndroidPermissions(accessToken, rtcMode))
         } catch (error: IllegalArgumentException) {
             result.error(
                 "RTC_TOKEN_INVALID",
@@ -273,7 +280,8 @@ class RtcFlutterSdkPlugin :
                 signalingUrl = start.signalingUrl,
                 listener = createListener(),
                 appId = start.appId,
-                appKey = start.appKey
+                appKey = start.appKey,
+                rtcMode = start.rtcMode
             )
 
             session = nextSession
@@ -286,7 +294,7 @@ class RtcFlutterSdkPlugin :
                     "appId" to (start.appId ?: start.tokenInfo.appId ?: ""),
                     "appKey" to (start.appKey ?: start.tokenInfo.appKey ?: ""),
                     "roomId" to (start.roomId ?: start.tokenInfo.roomId ?: ""),
-                    "rtcMode" to (start.tokenInfo.rtcMode ?: ""),
+                    "rtcMode" to (start.rtcMode ?: start.tokenInfo.rtcMode ?: ""),
                     "signalingUrl" to start.signalingUrl
                 )
             )
@@ -296,6 +304,10 @@ class RtcFlutterSdkPlugin :
             emitRtcEvent("error", mapOf("message" to message))
         } catch (error: IllegalStateException) {
             val message = error.message ?: "RTC start failed"
+            start.result.error("RTC_START_FAILED", message, null)
+            emitRtcEvent("error", mapOf("message" to message))
+        } catch (error: Throwable) {
+            val message = error.message ?: error.javaClass.simpleName
             start.result.error("RTC_START_FAILED", message, null)
             emitRtcEvent("error", mapOf("message" to message))
         }
@@ -391,6 +403,10 @@ class RtcFlutterSdkPlugin :
         val normalizedMode = rtcMode.orEmpty().lowercase(Locale.US)
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+
         if (
             normalizedMode.contains("video") ||
             normalizedMode.contains("live") ||
@@ -428,6 +444,7 @@ class RtcFlutterSdkPlugin :
         val appId: String?,
         val appKey: String?,
         val roomId: String?,
+        val rtcMode: String?,
         val signalingUrl: String,
         val speakerOn: Boolean,
         val tokenInfo: com.rtcone.sdk.RtcServiceSdk.AccessTokenInfo,

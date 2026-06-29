@@ -1,614 +1,388 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   RTC_DEFAULT_ADMIN_KEY,
   RTC_DEFAULT_SIGNALING_URL,
   createAdminApp,
-  createAdminAppKey,
-  deleteAdminApp,
   getAdminApp,
   getAdminApps,
   getRtcHealth,
+  issueRtcToken,
 } from "./sdk/rtcServiceSdk";
 import "./App.css";
 
-const DEFAULT_CLIENT_APP_NAME = "Hapi App";
+const DEFAULT_APP_NAME = "Android Voice App";
+const DEFAULT_PACKAGE_NAME = "com.example.app";
+const DEFAULT_ROOM_ID = "test-room";
+const DEFAULT_USER_ID = "test-user";
 
 export default function App() {
-  const [apiHealthStatus, setApiHealthStatus] = useState("");
-  const [isHealthLoading, setIsHealthLoading] = useState(false);
-  const [rtcConnectionStatus, setRtcConnectionStatus] = useState("idle");
-  const [clientApps, setClientApps] = useState([]);
-  const [clientKeyStatus, setClientKeyStatus] = useState("");
-  const [isClientAppsLoading, setIsClientAppsLoading] = useState(false);
-  const [isCreatingClientApp, setIsCreatingClientApp] = useState(false);
-  const [newClientAppName, setNewClientAppName] = useState(DEFAULT_CLIENT_APP_NAME);
-  const [generatedClientKey, setGeneratedClientKey] = useState(null);
-  const [creatingKeyAppId, setCreatingKeyAppId] = useState("");
-  const [deletingAppId, setDeletingAppId] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState("idle");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isIssuingToken, setIsIssuingToken] = useState(false);
+  const [apps, setApps] = useState([]);
+  const [createdCredentials, setCreatedCredentials] = useState(null);
+  const [tokenResult, setTokenResult] = useState(null);
+  const [appName, setAppName] = useState(DEFAULT_APP_NAME);
+  const [packageName, setPackageName] = useState(DEFAULT_PACKAGE_NAME);
+  const [roomId, setRoomId] = useState(DEFAULT_ROOM_ID);
+  const [userId, setUserId] = useState(DEFAULT_USER_ID);
+  const [rtcMode, setRtcMode] = useState("voice");
 
-  const apiErrorMessage = rtcConnectionStatus === "offline"
-    ? apiHealthStatus || clientKeyStatus
-    : "";
+  const androidEnv = useMemo(() => {
+    if (!createdCredentials) return "";
+
+    return [
+      `RTC_SIGNALING_URL=${RTC_DEFAULT_SIGNALING_URL}`,
+      `RTC_APP_ID=${createdCredentials.appId}`,
+      `RTC_APP_KEY=${createdCredentials.appKey}`,
+    ].join("\n");
+  }, [createdCredentials]);
+
+  const backendEnv = useMemo(() => {
+    if (!createdCredentials) return "";
+
+    return [
+      `RTC_API_BASE_URL=${RTC_DEFAULT_SIGNALING_URL}`,
+      `RTC_APP_ID=${createdCredentials.appId}`,
+      `RTC_APP_KEY=${createdCredentials.appKey}`,
+      `RTC_SERVER_SECRET=${createdCredentials.serverSecret}`,
+      "RTC_TOKEN_ENDPOINT=/client/rtc/token",
+    ].join("\n");
+  }, [createdCredentials]);
 
   useEffect(() => {
     void refreshDashboard();
   }, []);
 
   async function refreshDashboard() {
-    await Promise.allSettled([
-      loadApiHealth(),
-      loadClientApps(),
-    ]);
-  }
-
-  async function loadApiHealth() {
-    setIsHealthLoading(true);
-    setApiHealthStatus("");
-    setRtcConnectionStatus("connecting");
+    setIsRefreshing(true);
+    setStatusMessage("");
+    setConnectionStatus("connecting");
 
     try {
       await getRtcHealth();
-      setApiHealthStatus("RTC API is online.");
-      setRtcConnectionStatus("online");
-    } catch (event) {
-      const message = getErrorMessage(event);
-
-      console.error(message);
-      setApiHealthStatus(message);
-      setRtcConnectionStatus("offline");
-    } finally {
-      setIsHealthLoading(false);
-    }
-  }
-
-  async function loadClientApps() {
-    setIsClientAppsLoading(true);
-    setClientKeyStatus("");
-    setRtcConnectionStatus("connecting");
-
-    try {
       const response = await getAdminApps({ adminKey: RTC_DEFAULT_ADMIN_KEY });
-      const apps = readClientApps(response);
-      const appsWithKeys = await Promise.all(
-        apps.map(async (app) => {
-          const currentAppId = getClientAppId(app);
+      const appList = readApps(response);
+      const appsWithDetails = await Promise.all(
+        appList.map(async (app) => {
+          const appId = getAppId(app);
 
-          if (!currentAppId) {
-            return {
-              ...app,
-              apiKeys: [],
-            };
-          }
+          if (!appId) return app;
 
           try {
-            const details = await getAdminApp({
-              appId: currentAppId,
-              adminKey: RTC_DEFAULT_ADMIN_KEY,
-            });
-
-            return {
-              ...(details.app ?? app),
-              apiKeys: readApiKeys(details),
-            };
-          } catch (event) {
-            console.error(getErrorMessage(event));
-
-            return {
-              ...app,
-              apiKeys: [],
-            };
+            const details = await getAdminApp({ appId, adminKey: RTC_DEFAULT_ADMIN_KEY });
+            return details.app ?? app;
+          } catch {
+            return app;
           }
         }),
       );
 
-      setClientApps(appsWithKeys);
-      setClientKeyStatus(appsWithKeys.length ? "Credentials refreshed." : "No RTC app credentials created yet.");
-      setRtcConnectionStatus("online");
-    } catch (event) {
-      const message = getErrorMessage(event);
-
-      console.error(message);
-      setClientKeyStatus(message);
-      setRtcConnectionStatus("offline");
+      setApps(appsWithDetails);
+      setConnectionStatus("online");
+      setStatusMessage("Dashboard ready.");
+    } catch (error) {
+      setConnectionStatus("offline");
+      setStatusMessage(getErrorMessage(error));
     } finally {
-      setIsClientAppsLoading(false);
+      setIsRefreshing(false);
     }
   }
 
-  async function handleCreateClientApp(event) {
+  async function handleCreateApp(event) {
     event.preventDefault();
 
-    const name = newClientAppName.trim();
+    const name = appName.trim();
+    const packageId = packageName.trim();
 
     if (!name) {
-      setClientKeyStatus("Project name is required.");
+      setStatusMessage("App name is required.");
       return;
     }
 
-    setIsCreatingClientApp(true);
-    setClientKeyStatus("");
-    setRtcConnectionStatus("connecting");
+    setIsCreating(true);
+    setCreatedCredentials(null);
+    setTokenResult(null);
+    setStatusMessage("");
+    setConnectionStatus("connecting");
 
     try {
       const response = await createAdminApp({
         adminKey: RTC_DEFAULT_ADMIN_KEY,
         name,
+        packageName: packageId || undefined,
         environment: "production",
-        keyLabel: "Production App Secret",
+        platforms: ["android"],
+        keyLabel: "Production Server Secret",
       });
+      const credentials = readCredentials(response);
 
-      setGeneratedClientKey(readGeneratedClientKey(response));
-      setClientKeyStatus("App ID, App Key, and App Secret created.");
-      setRtcConnectionStatus("online");
-      await loadClientApps();
-    } catch (event) {
-      const message = getErrorMessage(event);
-
-      console.error(message);
-      setGeneratedClientKey(null);
-      setClientKeyStatus(message);
-      setRtcConnectionStatus("offline");
+      setCreatedCredentials(credentials);
+      setConnectionStatus("online");
+      setStatusMessage("App created. Save the Server Secret now.");
+      await refreshDashboard();
+    } catch (error) {
+      setConnectionStatus("offline");
+      setStatusMessage(getErrorMessage(error));
     } finally {
-      setIsCreatingClientApp(false);
+      setIsCreating(false);
     }
   }
 
-  async function handleCreateClientKey(app) {
-    const currentAppId = getClientAppId(app);
+  async function handleIssueToken(event) {
+    event.preventDefault();
 
-    if (!currentAppId) {
+    if (!createdCredentials?.serverSecret) {
+      setStatusMessage("Create an app first so the dashboard has a Server Secret.");
       return;
     }
 
-    setCreatingKeyAppId(currentAppId);
-    setClientKeyStatus("");
-    setRtcConnectionStatus("connecting");
+    const trimmedRoomId = roomId.trim();
+    const trimmedUserId = userId.trim();
+
+    if (!trimmedRoomId || !trimmedUserId) {
+      setStatusMessage("Room ID and user ID are required.");
+      return;
+    }
+
+    setIsIssuingToken(true);
+    setTokenResult(null);
+    setStatusMessage("");
+    setConnectionStatus("connecting");
 
     try {
-      const response = await createAdminAppKey({
-        adminKey: RTC_DEFAULT_ADMIN_KEY,
-        appId: currentAppId,
-        label: "Rotated App Secret",
+      const response = await issueRtcToken({
+        apiKey: createdCredentials.serverSecret,
+        appId: createdCredentials.appId,
+        appKey: createdCredentials.appKey,
+        externalUserId: trimmedUserId,
+        roomId: trimmedRoomId,
+        rtcMode,
       });
 
-      setGeneratedClientKey(readGeneratedClientKey(response));
-      setClientKeyStatus("New App Secret generated.");
-      setRtcConnectionStatus("online");
-      await loadClientApps();
-    } catch (event) {
-      const message = getErrorMessage(event);
-
-      console.error(message);
-      setClientKeyStatus(message);
-      setRtcConnectionStatus("offline");
+      setTokenResult(readTokenResult(response));
+      setConnectionStatus("online");
+      setStatusMessage("Fresh RTC token generated.");
+    } catch (error) {
+      setConnectionStatus("offline");
+      setStatusMessage(getErrorMessage(error));
     } finally {
-      setCreatingKeyAppId("");
+      setIsIssuingToken(false);
     }
   }
 
-  async function handleDeleteClientApp(app) {
-    const currentAppId = getClientAppId(app);
-    const appNameToDelete = getClientAppName(app);
-
-    if (!currentAppId || isProtectedClientApp(app)) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Delete "${appNameToDelete}"?\n\nThis removes its App Secrets and in-memory RTC state.`,
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    setDeletingAppId(currentAppId);
-    setClientKeyStatus("");
-    setRtcConnectionStatus("connecting");
-
-    try {
-      await deleteAdminApp({ appId: currentAppId, adminKey: RTC_DEFAULT_ADMIN_KEY });
-      setGeneratedClientKey((key) => (key?.appId === currentAppId ? null : key));
-      setClientKeyStatus(`${appNameToDelete} deleted.`);
-      setRtcConnectionStatus("online");
-      await loadClientApps();
-    } catch (event) {
-      const message = getErrorMessage(event);
-
-      console.error(message);
-      setClientKeyStatus(message);
-      setRtcConnectionStatus("offline");
-    } finally {
-      setDeletingAppId("");
-    }
-  }
-
-  async function copyGeneratedValue(value, label) {
-    if (!value) {
-      return;
-    }
+  async function copyValue(value, label) {
+    if (!value) return;
 
     try {
       await writeClipboardText(value);
-      setClientKeyStatus(`${label} copied.`);
-    } catch (event) {
-      console.error(getErrorMessage(event));
-      setClientKeyStatus(`Copy failed. Select the ${label.toLowerCase()} manually.`);
-    }
-  }
-
-  async function copyGeneratedEnv() {
-    if (!generatedClientKey?.secret) {
-      return;
-    }
-
-    try {
-      await writeClipboardText(
-        [
-          `RTC_API_BASE_URL=${RTC_DEFAULT_SIGNALING_URL}`,
-          `RTC_APP_ID=${generatedClientKey.appId}`,
-          `RTC_APP_KEY=${generatedClientKey.appKey}`,
-          `RTC_APP_SECRET=${generatedClientKey.secret}`,
-          `RTC_SERVER_SECRET=${generatedClientKey.secret}`,
-          "RTC_TOKEN_ENDPOINT=/client/rtc/token",
-        ].join("\n"),
-      );
-      setClientKeyStatus("Backend env values copied.");
-    } catch (event) {
-      console.error(getErrorMessage(event));
-      setClientKeyStatus("Copy failed. Select the env text manually.");
+      setStatusMessage(`${label} copied.`);
+    } catch {
+      setStatusMessage(`Copy failed. Select the ${label.toLowerCase()} manually.`);
     }
   }
 
   return (
     <main className="app-shell">
-      <section className="admin-dashboard" aria-label="RTC credentials dashboard">
+      <section className="dashboard" aria-label="RTC admin dashboard">
         <header className="dashboard-header">
           <div>
-            <h1>RTC Credentials Dashboard</h1>
-            <p>Create the App ID, App Key, and backend-only App Secret required for client SDK integration.</p>
-            <dl className="dashboard-endpoints" aria-label="RTC endpoint">
-              <div>
-                <dt>API base</dt>
-                <dd>{RTC_DEFAULT_SIGNALING_URL}</dd>
-              </div>
-            </dl>
+            <h1>RTC Admin Dashboard</h1>
+            <p>Create one app, copy its SDK credentials, then generate a fresh room token from the Server Secret.</p>
+            <div className="api-base">API base: <code>{RTC_DEFAULT_SIGNALING_URL}</code></div>
           </div>
-          <div className="dashboard-status-row">
-            <div className={`connection-indicator ${rtcConnectionStatus}`} role="status" aria-live="polite">
+          <div className="header-actions">
+            <div className={`connection-indicator ${connectionStatus}`} role="status" aria-live="polite">
               <span aria-hidden="true" />
-              {getConnectionLabel(rtcConnectionStatus)}
+              {getConnectionLabel(connectionStatus)}
             </div>
-            <button
-              className="secondary-button refresh-all-button"
-              type="button"
-              onClick={() => refreshDashboard()}
-              disabled={isHealthLoading || isClientAppsLoading}
-            >
-              {isHealthLoading || isClientAppsLoading ? "Refreshing" : "Refresh"}
+            <button className="secondary-button compact-button" type="button" onClick={refreshDashboard} disabled={isRefreshing}>
+              {isRefreshing ? "Refreshing" : "Refresh"}
             </button>
           </div>
         </header>
 
-        {apiErrorMessage ? (
-          <section className="api-alert" role="status" aria-live="polite">
-            <strong>RTC API unavailable</strong>
-            <span>{apiErrorMessage}</span>
-          </section>
-        ) : null}
-
-        <form className="client-app-panel" onSubmit={handleCreateClientApp}>
-          <div className="panel-header">
-            <div>
-              <h2>Create App Credentials</h2>
-              <p>Use App ID and App Key in the SDK. Keep App Secret on your backend only.</p>
-            </div>
-          </div>
-
-          <div className="client-app-form-grid">
-            <div className="field-group">
-              <label htmlFor="client-app-name">Project name</label>
-              <input
-                id="client-app-name"
-                value={newClientAppName}
-                onChange={(event) => setNewClientAppName(event.target.value)}
-                autoComplete="off"
-                placeholder="Hapi App"
-              />
-            </div>
-
-          </div>
-
-          <button className="create-client-button" type="submit" disabled={isCreatingClientApp}>
-            {isCreatingClientApp ? "Creating" : "Create App ID + App Key + App Secret"}
-          </button>
-        </form>
-
-        {generatedClientKey?.secret ? (
-          <section className="client-secret-panel" aria-label="Generated RTC app credentials">
-            <div>
-              <h2>Generated App Credentials</h2>
-              <p>Save these now. App Secret is shown only when it is generated.</p>
-            </div>
-            <dl className="credential-result-grid">
-              <div>
-                <dt>App ID</dt>
-                <dd>
-                  <code>{generatedClientKey.appId}</code>
-                  <button type="button" onClick={() => copyGeneratedValue(generatedClientKey.appId, "App ID")}>
-                    Copy
-                  </button>
-                </dd>
-              </div>
-              <div>
-                <dt>App Key</dt>
-                <dd>
-                  <code>{generatedClientKey.appKey}</code>
-                  <button type="button" onClick={() => copyGeneratedValue(generatedClientKey.appKey, "App Key")}>
-                    Copy
-                  </button>
-                </dd>
-              </div>
-              <div className="credential-secret-row">
-                <dt>App Secret</dt>
-                <dd>
-                  <code>{generatedClientKey.secret}</code>
-                  <button type="button" onClick={() => copyGeneratedValue(generatedClientKey.secret, "App Secret")}>
-                    Copy
-                  </button>
-                </dd>
-              </div>
-              <div className="credential-api-row">
-                <dt>API base</dt>
-                <dd>
-                  <code>{RTC_DEFAULT_SIGNALING_URL}</code>
-                  <button type="button" onClick={() => copyGeneratedValue(RTC_DEFAULT_SIGNALING_URL, "API base")}>
-                    Copy
-                  </button>
-                </dd>
-              </div>
-            </dl>
-            <div className="client-secret-actions">
-              <button type="button" className="secondary-button" onClick={copyGeneratedEnv}>
-                Copy backend env
+        <section className="flow-grid" aria-label="RTC app setup flow">
+          <StepCard number="1" title="Create App">
+            <form className="stacked-form" onSubmit={handleCreateApp}>
+              <label>
+                <span>App name</span>
+                <input value={appName} onChange={(event) => setAppName(event.target.value)} placeholder="Android Voice App" />
+              </label>
+              <label>
+                <span>Android package</span>
+                <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="com.example.app" />
+              </label>
+              <button type="submit" disabled={isCreating}>
+                {isCreating ? "Creating" : "Create App Credentials"}
               </button>
-            </div>
-          </section>
-        ) : null}
+            </form>
+          </StepCard>
 
-        <section className="client-apps-panel" aria-label="Existing RTC app credentials">
-          <div className="panel-header">
-            <div>
-              <h2>Existing App Credentials</h2>
-              <p>Review SDK credentials and rotate backend App Secrets when needed.</p>
-            </div>
-            <button className="secondary-button" type="button" onClick={loadClientApps} disabled={isClientAppsLoading}>
-              {isClientAppsLoading ? "Refreshing" : "Refresh"}
-            </button>
-          </div>
+          <StepCard number="2" title="Use Credentials">
+            {createdCredentials ? (
+              <div className="credential-stack">
+                <Credential label="App ID" value={createdCredentials.appId} onCopy={copyValue} />
+                <Credential label="App Key" value={createdCredentials.appKey} onCopy={copyValue} />
+                <Credential label="Server Secret" value={createdCredentials.serverSecret} onCopy={copyValue} secret />
+                <div className="copy-row">
+                  <button type="button" className="secondary-button" onClick={() => copyValue(androidEnv, "Android env")}>
+                    Copy Android values
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => copyValue(backendEnv, "Backend env")}>
+                    Copy backend values
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="empty-state">Create an app to show App ID, App Key, and Server Secret here.</div>
+            )}
+          </StepCard>
 
-          <div className="client-apps-table-wrap">
-            <table className="client-apps-table">
-              <thead>
-                <tr>
-                  <th>Project</th>
-                  <th>SDK credentials</th>
-                  <th>App Secrets</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientApps.length ? (
-                  clientApps.map((app) => {
-                    const currentAppId = getClientAppId(app);
-                    const apiKeys = readApiKeys(app);
-                    const clientPlatformId = getClientPackageName(app) || getClientBundleId(app);
-                    const protectedClientApp = isProtectedClientApp(app);
-
-                    return (
-                      <tr key={currentAppId}>
-                        <td>
-                          <strong>{getClientAppName(app)}</strong>
-                          <span>{getClientEnvironment(app)}</span>
-                          {clientPlatformId ? <span>{clientPlatformId}</span> : null}
-                        </td>
-                        <td>
-                          <div className="key-preview-list">
-                            <span>App ID: {currentAppId}</span>
-                            <span>App Key: {getClientAppKey(app)}</span>
-                          </div>
-                        </td>
-                        <td>
-                          {apiKeys.length ? (
-                            <div className="key-preview-list">
-                              {apiKeys.map((apiKey) => (
-                                <span key={getApiKeyId(apiKey)}>
-                                  {getApiKeyLabel(apiKey)}: {getApiKeyPreview(apiKey)}
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            "No App Secrets loaded"
-                          )}
-                        </td>
-                        <td>
-                          <div className="table-action-stack">
-                            <button
-                              className="secondary-button table-action-button"
-                              type="button"
-                              onClick={() => handleCreateClientKey(app)}
-                              disabled={creatingKeyAppId === currentAppId}
-                            >
-                              {creatingKeyAppId === currentAppId ? "Generating" : "Generate Secret"}
-                            </button>
-                            <button
-                              className="danger-button table-action-button"
-                              type="button"
-                              onClick={() => handleDeleteClientApp(app)}
-                              disabled={protectedClientApp || deletingAppId === currentAppId}
-                              title={protectedClientApp ? "The default local development app cannot be deleted" : ""}
-                            >
-                              {deletingAppId === currentAppId ? "Deleting" : "Delete"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td className="empty-cell" colSpan={4}>
-                      No RTC app credentials created yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <p className="status-message" role="status" aria-live="polite">
-            {clientKeyStatus}
-          </p>
+          <StepCard number="3" title="Generate Test Token">
+            <form className="stacked-form" onSubmit={handleIssueToken}>
+              <label>
+                <span>Room ID</span>
+                <input value={roomId} onChange={(event) => setRoomId(event.target.value)} placeholder="test-room" />
+              </label>
+              <label>
+                <span>User ID</span>
+                <input value={userId} onChange={(event) => setUserId(event.target.value)} placeholder="test-user" />
+              </label>
+              <label>
+                <span>RTC mode</span>
+                <select value={rtcMode} onChange={(event) => setRtcMode(event.target.value)}>
+                  <option value="voice">Voice room</option>
+                  <option value="video">Video room</option>
+                </select>
+              </label>
+              <button type="submit" disabled={isIssuingToken || !createdCredentials?.serverSecret}>
+                {isIssuingToken ? "Generating" : "Generate Token"}
+              </button>
+            </form>
+            {tokenResult?.token ? (
+              <div className="token-result">
+                <Credential label="RTC Token" value={tokenResult.token} onCopy={copyValue} secret />
+                <p>Use this token only for testing. Your app backend should generate a new token for every room join.</p>
+              </div>
+            ) : null}
+          </StepCard>
         </section>
+
+        <section className="existing-apps" aria-label="Existing RTC apps">
+          <div className="section-heading">
+            <h2>Existing Apps</h2>
+            <p>Server Secrets are shown only when created. Create a new app if you need a fresh visible secret.</p>
+          </div>
+          <div className="app-list">
+            {apps.length ? apps.map((app) => (
+              <article className="app-row" key={getAppId(app)}>
+                <div>
+                  <strong>{getAppName(app)}</strong>
+                  <span>{getPackageName(app) || "No package set"}</span>
+                </div>
+                <code>{getAppId(app)}</code>
+                <code>{getAppKey(app)}</code>
+              </article>
+            )) : (
+              <div className="empty-state">No apps created yet.</div>
+            )}
+          </div>
+        </section>
+
+        <p className="status-message" role="status" aria-live="polite">{statusMessage}</p>
       </section>
     </main>
   );
 }
 
-function readClientApps(response) {
-  if (Array.isArray(response?.apps)) {
-    return response.apps;
-  }
-
-  return [];
+function StepCard({ number, title, children }) {
+  return (
+    <section className="step-card">
+      <div className="step-heading">
+        <span>{number}</span>
+        <h2>{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
 }
 
-function readApiKeys(source) {
-  if (Array.isArray(source?.apiKeys)) {
-    return source.apiKeys;
-  }
-
-  if (Array.isArray(source?.api_keys)) {
-    return source.api_keys;
-  }
-
-  return [];
+function Credential({ label, value, onCopy, secret = false }) {
+  return (
+    <div className={secret ? "credential secret" : "credential"}>
+      <dt>{label}</dt>
+      <dd>
+        <code>{value}</code>
+        <button type="button" onClick={() => onCopy(value, label)}>Copy</button>
+      </dd>
+    </div>
+  );
 }
 
-function readGeneratedClientKey(response) {
+function readApps(response) {
+  return Array.isArray(response?.apps) ? response.apps : [];
+}
+
+function readCredentials(response) {
   const apiKey = typeof response?.api_key === "string" ? { secret: response.api_key } : response?.apiKey;
   const app = response?.app ?? {};
-  const appId = getClientAppId(app) || apiKey?.appId || apiKey?.app_id || "";
-  const appKey = getClientAppKey(app) || response?.appKey || response?.app_key || "";
-  const secret =
-    response?.appSecret ??
-    response?.app_secret ??
-    apiKey?.secret ??
-    apiKey?.appSecret ??
-    apiKey?.app_secret ??
-    apiKey?.serverSecret ??
-    apiKey?.server_secret ??
-    apiKey?.apiKey ??
-    apiKey?.api_key ??
+  const serverSecret =
     response?.serverSecret ??
     response?.server_secret ??
+    response?.appSecret ??
+    response?.app_secret ??
     response?.api_key ??
+    apiKey?.secret ??
+    apiKey?.serverSecret ??
+    apiKey?.server_secret ??
+    apiKey?.appSecret ??
+    apiKey?.app_secret ??
+    apiKey?.apiKey ??
+    apiKey?.api_key ??
     "";
 
   return {
-    appId,
-    appKey,
-    appName: getClientAppName(app),
-    keyId: apiKey?.id ?? apiKey?.keyId ?? apiKey?.key_id ?? "",
-    label: apiKey?.label ?? "App Secret",
-    secret,
-    preview: apiKey?.keyPreview ?? apiKey?.key_preview ?? makeKeyPreview(secret),
+    appId: getAppId(app) || apiKey?.appId || apiKey?.app_id || "",
+    appKey: getAppKey(app) || response?.appKey || response?.app_key || "",
+    serverSecret,
   };
 }
 
-function getClientAppId(app) {
+function readTokenResult(response) {
+  return {
+    token: response?.token ?? response?.accessToken ?? response?.access_token ?? "",
+    expiresAt: response?.expiresAt ?? response?.expires_at ?? "",
+  };
+}
+
+function getAppId(app) {
   return app?.appId ?? app?.app_id ?? app?.id ?? "";
 }
 
-function getClientAppKey(app) {
+function getAppKey(app) {
   return app?.appKey ?? app?.app_key ?? "";
 }
 
-function getClientAppName(app) {
+function getAppName(app) {
   return app?.name ?? "Untitled app";
 }
 
-function getClientPackageName(app) {
+function getPackageName(app) {
   return app?.packageName ?? app?.package_name ?? "";
 }
 
-function getClientBundleId(app) {
-  return app?.bundleId ?? app?.bundle_id ?? "";
-}
-
-function getClientEnvironment(app) {
-  return app?.environment ?? "development";
-}
-
-function isProtectedClientApp(app) {
-  return getClientAppId(app) === "local-rtc-client";
-}
-
-function getApiKeyId(apiKey) {
-  return apiKey?.id ?? apiKey?.keyId ?? apiKey?.key_id ?? getApiKeyPreview(apiKey);
-}
-
-function getApiKeyLabel(apiKey) {
-  return apiKey?.label ?? "App Secret";
-}
-
-function getApiKeyPreview(apiKey) {
-  return apiKey?.keyPreview ??
-    apiKey?.key_preview ??
-    apiKey?.appSecretPreview ??
-    apiKey?.app_secret_preview ??
-    makeKeyPreview(
-      apiKey?.secret ??
-        apiKey?.appSecret ??
-        apiKey?.app_secret ??
-        apiKey?.serverSecret ??
-        apiKey?.server_secret ??
-        apiKey?.apiKey ??
-        apiKey?.api_key ??
-        "",
-    );
-}
-
-function makeKeyPreview(secret) {
-  if (!secret) {
-    return "secret hidden";
-  }
-
-  if (secret.length <= 20) {
-    return secret;
-  }
-
-  return `${secret.slice(0, 10)}...${secret.slice(-8)}`;
-}
-
 function getConnectionLabel(status) {
-  if (status === "online") {
-    return "RTC API online";
-  }
-
-  if (status === "connecting") {
-    return "Checking RTC API";
-  }
-
-  if (status === "offline") {
-    return "RTC API offline";
-  }
-
-  return "RTC API idle";
+  if (status === "online") return "API online";
+  if (status === "connecting") return "Checking";
+  if (status === "offline") return "API offline";
+  return "Idle";
 }
 
-function getErrorMessage(event) {
-  return event instanceof Error ? event.message : "Something went wrong";
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : "Something went wrong";
 }
 
 async function writeClipboardText(value) {
@@ -621,21 +395,9 @@ async function writeClipboardText(value) {
   textArea.value = value;
   textArea.setAttribute("readonly", "");
   textArea.style.position = "fixed";
-  textArea.style.top = "0";
   textArea.style.left = "-9999px";
-  textArea.style.opacity = "0";
-
   document.body.appendChild(textArea);
-  textArea.focus();
   textArea.select();
-
-  try {
-    const didCopy = document.execCommand("copy");
-
-    if (!didCopy) {
-      throw new Error("Clipboard copy was not accepted");
-    }
-  } finally {
-    document.body.removeChild(textArea);
-  }
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
 }

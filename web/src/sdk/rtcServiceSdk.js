@@ -1,7 +1,19 @@
 import { io } from "socket.io-client";
 
+function getDefaultSignalingUrl() {
+  if (import.meta.env.DEV) {
+    return "http://localhost:4000";
+  }
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+
+  return "http://localhost:4000";
+}
+
 export const RTC_DEFAULT_SIGNALING_URL =
-  import.meta.env.VITE_SIGNALING_URL ?? "http://localhost:4000";
+  import.meta.env.VITE_SIGNALING_URL ?? getDefaultSignalingUrl();
 
 export const RTC_DEFAULT_APP_ID =
   import.meta.env.VITE_RTC_APP_ID ?? "local-rtc-client";

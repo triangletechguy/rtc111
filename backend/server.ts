@@ -1,6 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { existsSync } from "fs";
 import http from "http";
 import jwt, { type JwtPayload, type SignOptions } from "jsonwebtoken";
+import path from "path";
 import { createHash, randomUUID } from "crypto";
 import { Server, type Socket } from "socket.io";
 
@@ -336,6 +338,14 @@ let nextRoomId = 1;
 bootstrapDefaultClientApp();
 bootstrapConfiguredClientApp();
 
+const webDistDir = findExistingPath([
+  path.resolve(process.cwd(), "../web/dist"),
+  path.resolve(process.cwd(), "web/dist"),
+  path.resolve(__dirname, "../web/dist"),
+  path.resolve(__dirname, "../../web/dist"),
+]);
+const webIndexFile = webDistDir ? path.join(webDistDir, "index.html") : "";
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -359,7 +369,16 @@ app.use((req, _res, next) => {
   next();
 });
 
+if (webDistDir) {
+  app.use(express.static(webDistDir));
+}
+
 app.get("/", (_req, res) => {
+  if (webIndexFile && existsSync(webIndexFile)) {
+    res.sendFile(webIndexFile);
+    return;
+  }
+
   res.type("html").send(`
     <!doctype html>
     <html lang="en">
@@ -663,21 +682,56 @@ app.post("/admin/apps/:appId/keys/:keyId/revoke", requireAdminAuth, (req, res) =
 });
 
 app.post("/rtc-token", (req, res) => {
+  const requestedAppId = readString(req.body?.appId) || readString(req.body?.app_id);
+  const requestedAppKey = readString(req.body?.appKey) || readString(req.body?.app_key);
   const roomId = readString(req.body?.roomId) || "room1";
   const userId = readString(req.body?.userId) || `web-${randomUUID()}`;
   const role = readString(req.body?.role) || "publisher";
   const rtcMode = readString(req.body?.rtcMode) || readString(req.body?.rtc_mode) || "video";
   const permissions = readPermissions(req.body?.permissions, defaultPermissionsForRtcMode(rtcMode));
-  const defaultAppSecret = getPrimaryAppSecret(DEFAULT_CLIENT_APP_ID);
+  let tokenApp = clientApps.get(DEFAULT_CLIENT_APP_ID);
 
-  ensureRoomForRtcMode(DEFAULT_CLIENT_APP_ID, roomId, rtcMode);
+  if (requestedAppId || requestedAppKey) {
+    if (!requestedAppId || !requestedAppKey) {
+      res.status(400).json({ error: "appId and appKey are both required for app-scoped test tokens" });
+      return;
+    }
+
+    tokenApp = clientApps.get(requestedAppId);
+
+    if (!tokenApp) {
+      res.status(404).json({ error: "RTC app was not found" });
+      return;
+    }
+
+    if (tokenApp.appKey !== requestedAppKey) {
+      res.status(403).json({ error: "appKey does not match the RTC app" });
+      return;
+    }
+  }
+
+  if (!tokenApp) {
+    res.status(500).json({ error: "Default RTC app is not configured" });
+    return;
+  }
+
+  const appSecret = getPrimaryAppSecret(tokenApp.id);
+
+  if (!appSecret) {
+    res.status(500).json({ error: "RTC app does not have an active Server Secret" });
+    return;
+  }
+
+  ensureExternalUser(tokenApp.id, userId);
+  ensureRoomForRtcMode(tokenApp.id, roomId, rtcMode);
 
   res.json(issueToken({
-    appId: DEFAULT_CLIENT_APP_ID,
-    appSecretId: defaultAppSecret?.id,
-    signingSecret: defaultAppSecret?.secret,
+    appId: tokenApp.id,
+    appSecretId: appSecret.id,
+    signingSecret: appSecret.secret,
     roomId,
     userId,
+    externalUserId: userId,
     role,
     rtcMode,
     permissions,
@@ -1180,7 +1234,9 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const rtcMode = (socket.data.rtcMode as string | undefined) ?? room.roomType;
+    const rtcMode = readString(payload.rtcMode ?? payload.rtc_mode)
+      || (socket.data.rtcMode as string | undefined)
+      || room.roomType;
     const micEnabled = readBoolean(payload.micEnabled, true);
     const cameraEnabled = readBoolean(payload.cameraEnabled, !isAudioOnlyRtcMode(rtcMode));
     const noiseCancellationEnabled = readBoolean(payload.noiseCancellationEnabled, true);
@@ -1841,6 +1897,10 @@ server.listen(PORT, HOST, () => {
   console.log(`RTC Server running on http://${HOST}:${PORT}`);
   console.log(`Open backend status at http://localhost:${PORT}`);
 });
+
+function findExistingPath(candidates: string[]) {
+  return candidates.find((candidate) => existsSync(path.join(candidate, "index.html"))) ?? "";
+}
 
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
   const token = getBearerToken(req.header("authorization"));

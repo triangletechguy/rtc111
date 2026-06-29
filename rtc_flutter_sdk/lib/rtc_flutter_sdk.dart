@@ -111,11 +111,11 @@ class RtcFlutterSdk {
       'com.rtcone.sdk/rtc_flutter_sdk/remote_video_view';
   static const String defaultAppId = String.fromEnvironment(
     'RTC_APP_ID',
-    defaultValue: 'test000',
+    defaultValue: 'android-voice-app-2',
   );
   static const String defaultAppKey = String.fromEnvironment(
     'RTC_APP_KEY',
-    defaultValue: 'rtc_app_47e10be169ed47b88166aef86510dab6',
+    defaultValue: 'rtc_app_57001084b68744f0ab00edbe2d00af2f',
   );
   static const String defaultAccessToken = String.fromEnvironment(
     'RTC_ACCESS_TOKEN',
@@ -196,12 +196,13 @@ class RtcFlutterSdk {
   }
 
   static Future<List<String>> requiredAndroidPermissions(
-    String accessToken,
-  ) async {
+    String accessToken, {
+    String? rtcMode,
+  }) async {
     _ensureAndroid();
     final raw = await _channel.invokeMethod<Object?>(
       'requiredAndroidPermissions',
-      {'accessToken': accessToken},
+      {'accessToken': accessToken, 'rtcMode': rtcMode?.trim()},
     );
     return _stringList(raw);
   }

@@ -68,6 +68,11 @@ class RtcDashboardSession private constructor(
         }
 
         @JvmStatic
+        fun requiredAndroidPermissions(accessToken: String, rtcMode: String?): List<String> {
+            return RtcServiceSdk.requiredAndroidPermissionsForToken(accessToken, rtcMode)
+        }
+
+        @JvmStatic
         @JvmOverloads
         fun start(
             context: Context,
@@ -76,14 +81,16 @@ class RtcDashboardSession private constructor(
             signalingUrl: String = RtcServiceSdk.DEFAULT_SIGNALING_URL,
             listener: Listener = object : Listener {},
             appId: String? = null,
-            appKey: String? = null
+            appKey: String? = null,
+            rtcMode: String? = null
         ): RtcDashboardSession {
             val config = RtcServiceSdk.Config.dashboardToken(
                 accessToken = accessToken,
                 roomId = roomId,
                 signalingUrl = signalingUrl,
                 appId = appId,
-                appKey = appKey
+                appKey = appKey,
+                rtcMode = rtcMode
             )
             val bridge = DashboardListener(config.roomId, listener)
             val sdk = RtcServiceSdk(context.applicationContext, config, bridge)
