@@ -64,8 +64,8 @@ class RtcServiceSdk(
         val iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         ),
-        val appId: String? = RtcServiceSdk.DEFAULT_APP_ID,
-        val appKey: String? = RtcServiceSdk.DEFAULT_APP_KEY
+        val appId: String? = null,
+        val appKey: String? = null
     ) {
         init {
             RtcServiceSdk.validateProjectCredentials(accessToken, appId, appKey)
@@ -198,8 +198,8 @@ class RtcServiceSdk(
                     enableNoiseCancellation = enableAudio,
                     rtcMode = resolvedRtcMode ?: if (enableVideo) "video" else "voice",
                     iceServers = iceServers,
-                    appId = appId ?: RtcServiceSdk.DEFAULT_APP_ID,
-                    appKey = appKey ?: RtcServiceSdk.DEFAULT_APP_KEY
+                    appId = appId,
+                    appKey = appKey
                 )
             }
         }
@@ -2673,7 +2673,9 @@ class RtcServiceSdk(
             roomId: String,
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
-            rtcMode: String? = null
+            rtcMode: String? = null,
+            appId: String? = null,
+            appKey: String? = null
         ): RtcServiceSdk {
             return RtcServiceSdk(
                 context = context,
@@ -2681,7 +2683,9 @@ class RtcServiceSdk(
                     signalingUrl = signalingUrl,
                     accessToken = accessToken,
                     roomId = roomId,
-                    rtcMode = rtcMode
+                    rtcMode = rtcMode,
+                    appId = appId,
+                    appKey = appKey
                 ),
                 listener = listener
             )
@@ -2694,14 +2698,18 @@ class RtcServiceSdk(
             accessToken: String,
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
-            rtcMode: String? = null
+            rtcMode: String? = null,
+            appId: String? = null,
+            appKey: String? = null
         ): RtcServiceSdk {
             return RtcServiceSdk(
                 context = context,
                 config = Config.dashboardToken(
                     signalingUrl = signalingUrl,
                     accessToken = accessToken,
-                    rtcMode = rtcMode
+                    rtcMode = rtcMode,
+                    appId = appId,
+                    appKey = appKey
                 ),
                 listener = listener
             )
@@ -2716,9 +2724,11 @@ class RtcServiceSdk(
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
             initialEffects: JSONObject? = null,
-            rtcMode: String? = null
+            rtcMode: String? = null,
+            appId: String? = null,
+            appKey: String? = null
         ): RtcServiceSdk {
-            return fromDashboardToken(context, accessToken, roomId, listener, signalingUrl, rtcMode)
+            return fromDashboardToken(context, accessToken, roomId, listener, signalingUrl, rtcMode, appId, appKey)
                 .also { it.start(initialEffects) }
         }
 
@@ -2730,9 +2740,11 @@ class RtcServiceSdk(
             listener: Listener,
             signalingUrl: String = DEFAULT_SIGNALING_URL,
             initialEffects: JSONObject? = null,
-            rtcMode: String? = null
+            rtcMode: String? = null,
+            appId: String? = null,
+            appKey: String? = null
         ): RtcServiceSdk {
-            return fromDashboardToken(context, accessToken, listener, signalingUrl, rtcMode)
+            return fromDashboardToken(context, accessToken, listener, signalingUrl, rtcMode, appId, appKey)
                 .also { it.start(initialEffects) }
         }
 

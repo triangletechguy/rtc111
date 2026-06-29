@@ -8,16 +8,18 @@
       ],
       "@/assets/*": [
         "./assets/*"
-      ],
-      "@yourplatform/sdk": [
-        "./packages/sdk/src/index.ts"
       ]
     }
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "server",
+    "packages"
   ]
 }

@@ -1,0 +1,12 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["com.rtcapp.rtcdashboardsdk.RtcDashboardSdkModule"],
+    "gradleAarProjects": [
+      {
+        "name": "rtc-default-sdk",
+        "aarFilePath": "android/libs/rtc-default-sdk-release.aar"
+      }
+    ]
+  }
+}

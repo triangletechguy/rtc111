@@ -1,173 +1,159 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Chat</title>
-  <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.2.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin:0; background:#0a0a0a; font-family:sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; gap:16px; padding:24px; }
-    h1 { color:#fff; margin:0; }
-
-    /* Lobby */
-    #lobby { display:flex; flex-direction:column; align-items:center; gap:16px; }
-    #lobby p { color:#888; margin:0; }
-    #channelInput {
-      background:#1a1a1a; border:1px solid #333; color:#fff;
-      padding:12px 20px; border-radius:10px; font-size:16px;
-      width:240px; text-align:center; outline:none;
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      background: #0a0a0a;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    #channelInput:focus { border-color:#208AEF; }
-    #channelInput::placeholder { color:#555; }
-
-    /* Buttons */
-    .btn { border:none; padding:14px 44px; border-radius:12px; font-size:17px; cursor:pointer; font-weight:600; transition:opacity 0.15s; }
-    .btn:disabled { opacity:0.5; cursor:not-allowed; }
-    .btn-primary { background:#208AEF; color:#fff; }
-    .btn-danger  { background:#e53935; color:#fff; }
-
-    /* Controls row */
-    #controls { display:none; gap:12px; flex-wrap:wrap; justify-content:center; }
-    .btn-control {
-      background:#1e1e1e; color:#fff; border:1px solid #333;
-      padding:10px 24px; border-radius:10px; font-size:15px;
-      cursor:pointer; transition:background 0.15s;
+    main {
+      width: min(100%, 720px);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: center;
     }
-    .btn-control.muted { background:#444; border-color:#666; }
-
-    /* Videos */
-    #videos { display:flex; flex-wrap:wrap; gap:16px; justify-content:center; }
-    .video-tile { width:320px; height:240px; background:#1a1a1a; border-radius:12px; overflow:hidden; }
-
-    /* Status / error */
-    #status { color:#aaa; font-size:14px; display:none; }
-    #error  { color:#ff4d4d; font-size:14px; display:none; text-align:center; max-width:360px; }
+    h1 { margin: 0; font-size: clamp(28px, 8vw, 44px); letter-spacing: 0; }
+    p { margin: 0; color: #aaa; text-align: center; }
+    input {
+      width: min(100%, 320px);
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 16px;
+      padding: 12px 16px;
+      text-align: center;
+    }
+    input:focus { border-color: #208aef; outline: none; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 700;
+      padding: 14px 32px;
+      background: #208aef;
+    }
+    button.secondary { background: #333; }
+    button.danger { background: #e53935; }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+    .video-shell {
+      width: min(100%, 640px);
+      aspect-ratio: 16 / 9;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #151515;
+      border: 1px solid #303030;
+      display: grid;
+      place-items: center;
+    }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    #status { min-height: 20px; color: #aaa; }
+    #error { color: #ff6b6b; min-height: 20px; }
   </style>
 </head>
 <body>
-  <h1>🌐 Web Video Chat</h1>
-
-  <div id="lobby">
-    <p>Enter a channel name to join</p>
+  <main>
+    <h1>Video Chat</h1>
+    <p>Enter a channel name and preview your local camera.</p>
     <input id="channelInput" type="text" placeholder="e.g. main" maxlength="64" />
+    <div class="video-shell">
+      <video id="localVideo" autoplay muted playsinline hidden></video>
+      <p id="emptyState">Camera preview is off.</p>
+    </div>
     <p id="status"></p>
     <p id="error"></p>
-    <button id="joinBtn" class="btn btn-primary">Join Call</button>
-  </div>
-
-  <div id="controls">
-    <button id="muteAudioBtn" class="btn-control">🎤 Mute</button>
-    <button id="muteCameraBtn" class="btn-control">📷 Hide Camera</button>
-    <button id="endBtn" class="btn btn-danger">End Call</button>
-  </div>
-
-  <div id="videos"></div>
+    <div class="controls">
+      <button id="startBtn">Start Preview</button>
+      <button id="muteBtn" class="secondary" disabled>Mute</button>
+      <button id="stopBtn" class="danger" disabled>Stop</button>
+    </div>
+  </main>
 
   <script>
-    const APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
-    const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    const channelInput = document.getElementById("channelInput");
+    const localVideo = document.getElementById("localVideo");
+    const emptyState = document.getElementById("emptyState");
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const startBtn = document.getElementById("startBtn");
+    const muteBtn = document.getElementById("muteBtn");
+    const stopBtn = document.getElementById("stopBtn");
 
-    let audioTrack = null;
-    let videoTrack = null;
-    let audioMuted  = false;
-    let cameraMuted = false;
+    let stream = null;
+    let muted = false;
 
-    // ── UI helpers ────────────────────────────────────────────────────────────
-    function setStatus(msg) {
-      const el = document.getElementById("status");
-      el.style.display = msg ? "block" : "none";
-      el.textContent = msg;
+    function setStatus(message) {
+      statusEl.textContent = message || "";
     }
 
-    function setError(msg) {
-      const el = document.getElementById("error");
-      el.style.display = msg ? "block" : "none";
-      el.textContent = msg;
+    function setError(message) {
+      errorEl.textContent = message || "";
     }
 
-    function friendlyError(e) {
-      if (e.name === "NotAllowedError")  return "Camera/microphone access was denied. Please allow permissions and try again.";
-      if (e.name === "NotFoundError")    return "No camera or microphone found on this device.";
-      if (e.name === "NotReadableError") return "Camera or microphone is already in use by another app.";
-      return e.message || "Something went wrong. Please try again.";
+    function stopPreview() {
+      stream?.getTracks().forEach(track => track.stop());
+      stream = null;
+      muted = false;
+      localVideo.srcObject = null;
+      localVideo.hidden = true;
+      emptyState.hidden = false;
+      startBtn.disabled = false;
+      muteBtn.disabled = true;
+      stopBtn.disabled = true;
+      muteBtn.textContent = "Mute";
+      setStatus("");
     }
 
-    // ── Remote user events — registered once, outside join handler ───────────
-    client.on("user-published", async (user, mediaType) => {
-      await client.subscribe(user, mediaType);
-      if (mediaType === "video") {
-        const div = document.createElement("div");
-        div.id = "remote-" + user.uid;
-        div.className = "video-tile";
-        document.getElementById("videos").appendChild(div);
-        user.videoTrack.play("remote-" + user.uid);
+    startBtn.addEventListener("click", async () => {
+      const channel = channelInput.value.trim();
+      if (!channel) {
+        setError("Please enter a channel name.");
+        return;
       }
-      if (mediaType === "audio") user.audioTrack.play();
-    });
-
-    client.on("user-unpublished", (user) => {
-      document.getElementById("remote-" + user.uid)?.remove();
-    });
-
-    // ── Join ──────────────────────────────────────────────────────────────────
-    document.getElementById("joinBtn").onclick = async () => {
-      const channel = document.getElementById("channelInput").value.trim();
-      if (!channel) { setError("Please enter a channel name."); return; }
 
       setError("");
-      setStatus("Joining...");
-      const joinBtn = document.getElementById("joinBtn");
-      joinBtn.disabled = true;
+      setStatus("Starting preview...");
+      startBtn.disabled = true;
 
       try {
-        await client.join(APP_ID, channel, null, null);
-        [audioTrack, videoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
-        await client.publish([audioTrack, videoTrack]);
-
-        const div = document.createElement("div");
-        div.id = "local";
-        div.className = "video-tile";
-        document.getElementById("videos").appendChild(div);
-        videoTrack.play("local");
-
-        // Switch UI: hide lobby, show controls
-        document.getElementById("lobby").style.display = "none";
-        document.getElementById("controls").style.display = "flex";
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        localVideo.srcObject = stream;
+        localVideo.hidden = false;
+        emptyState.hidden = true;
+        muteBtn.disabled = false;
+        stopBtn.disabled = false;
+        setStatus("Previewing #" + channel);
+      } catch (error) {
+        startBtn.disabled = false;
         setStatus("");
-
-      } catch (e) {
-        setError(friendlyError(e));
-        setStatus("");
-        joinBtn.disabled = false;
+        setError(error.message || "Could not start camera preview.");
       }
-    };
+    });
 
-    // ── Mute audio ────────────────────────────────────────────────────────────
-    document.getElementById("muteAudioBtn").onclick = async () => {
-      if (!audioTrack) return;
-      audioMuted = !audioMuted;
-      await audioTrack.setMuted(audioMuted);
-      const btn = document.getElementById("muteAudioBtn");
-      btn.textContent = audioMuted ? "🔇 Unmute" : "🎤 Mute";
-      btn.classList.toggle("muted", audioMuted);
-    };
+    muteBtn.addEventListener("click", () => {
+      if (!stream) return;
+      muted = !muted;
+      stream.getAudioTracks().forEach(track => { track.enabled = !muted; });
+      muteBtn.textContent = muted ? "Unmute" : "Mute";
+    });
 
-    // ── Mute camera ───────────────────────────────────────────────────────────
-    document.getElementById("muteCameraBtn").onclick = async () => {
-      if (!videoTrack) return;
-      cameraMuted = !cameraMuted;
-      await videoTrack.setMuted(cameraMuted);
-      const btn = document.getElementById("muteCameraBtn");
-      btn.textContent = cameraMuted ? "🙈 Show Camera" : "📷 Hide Camera";
-      btn.classList.toggle("muted", cameraMuted);
-    };
-
-    // ── End call ──────────────────────────────────────────────────────────────
-    document.getElementById("endBtn").onclick = async () => {
-      videoTrack?.close();
-      audioTrack?.close();
-      await client.leave();
-      window.location.reload();
-    };
+    stopBtn.addEventListener("click", stopPreview);
+    window.addEventListener("beforeunload", stopPreview);
   </script>
 </body>
 </html>

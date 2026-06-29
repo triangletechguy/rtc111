@@ -1,9 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Alert, PermissionsAndroid } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-
-const APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
 
 async function requestPermissions() {
   if (Platform.OS !== "android") return true;
@@ -21,54 +19,34 @@ export default function ScreenShareRoom() {
   const [role, setRole] = useState<"sharer"|"viewer">("sharer");
   const [inCall, setInCall] = useState(false);
   const [joining, setJoining] = useState(false);
-  const [remoteUid, setRemoteUid] = useState<number|null>(null);
   const [sharing, setSharing] = useState(false);
-  const engineRef = useRef<any>(null);
 
   const join = async () => {
     if (!channel.trim()) { Alert.alert("Enter a channel name"); return; }
     setJoining(true);
-    const ok = await requestPermissions();
-    if (!ok) { setJoining(false); return; }
-
-    const { createAgoraRtcEngine, ChannelProfileType, ClientRoleType } = require("react-native-agora");
-    const engine = createAgoraRtcEngine();
-    engineRef.current = engine;
-    engine.initialize({ appId: APP_ID });
-    engine.setChannelProfile(ChannelProfileType.ChannelProfileLiveBroadcasting);
-    engine.setClientRole(role === "sharer" ? ClientRoleType.ClientRoleBroadcaster : ClientRoleType.ClientRoleAudience);
-    engine.enableVideo();
-    engine.registerEventHandler({
-      onUserJoined: (_c: any, uid: number) => setRemoteUid(uid),
-      onUserOffline: () => setRemoteUid(null),
-    });
-    await engine.joinChannel(null, channel.trim(), 0, {});
+    if (role === "sharer") {
+      const ok = await requestPermissions();
+      if (!ok) { setJoining(false); return; }
+    }
     setJoining(false);
     setInCall(true);
   };
 
   const startScreenShare = () => {
-    engineRef.current?.startScreenCapture({ captureVideo: true, captureAudio: true });
     setSharing(true);
   };
 
   const stopScreenShare = () => {
-    engineRef.current?.stopScreenCapture();
     setSharing(false);
   };
 
-  const leave = async () => {
+  const leave = () => {
     if (sharing) stopScreenShare();
-    await engineRef.current?.leaveChannel();
-    engineRef.current?.release();
-    engineRef.current = null;
-    setRemoteUid(null);
     setInCall(false);
     setSharing(false);
   };
 
   if (inCall) {
-    const { RtcSurfaceView, VideoSourceType } = require("react-native-agora");
     return (
       <SafeAreaView style={s.safe}>
         <View style={s.callBar}>
@@ -82,14 +60,19 @@ export default function ScreenShareRoom() {
           </TouchableOpacity>
         </View>
         <View style={{flex:1, backgroundColor:"#000"}}>
-          {remoteUid !== null
-            ? <RtcSurfaceView style={{flex:1}} canvas={{uid: remoteUid, sourceType: VideoSourceType.VideoSourceRemote}}/>
-            : !sharing && <View style={s.waitBox}><Text style={s.waitText}>Waiting for sharer…</Text><Text style={s.waitSub}>Channel: <Text style={{color:"#534ab7"}}>#{channel}</Text></Text></View>
+          {sharing
+            ? (
+              <View style={s.sharePreview}>
+                <Text style={s.sharePreviewTitle}>Sharing screen</Text>
+                <Text style={s.sharePreviewSub}>#{channel}</Text>
+              </View>
+            )
+            : <View style={s.waitBox}><Text style={s.waitText}>Waiting for sharer...</Text><Text style={s.waitSub}>Channel: <Text style={{color:"#534ab7"}}>#{channel}</Text></Text></View>
           }
           {role === "sharer" && (
             <View style={s.shareControls}>
               <TouchableOpacity style={[s.shareBtn, sharing ? s.shareBtnStop : s.shareBtnStart]} onPress={sharing ? stopScreenShare : startScreenShare}>
-                <Text style={s.shareBtnText}>{sharing?"⏹ Stop Sharing":"🖥️ Share Screen"}</Text>
+                <Text style={s.shareBtnText}>{sharing ? "Stop Sharing" : "Share Screen"}</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -147,6 +130,9 @@ const s = StyleSheet.create({
   waitBox: { flex:1, alignItems:"center", justifyContent:"center", gap:8 },
   waitText: { color:"#888", fontSize:16 },
   waitSub: { color:"#666", fontSize:14 },
+  sharePreview: { flex:1, alignItems:"center", justifyContent:"center", gap:8, backgroundColor:"#101820" },
+  sharePreviewTitle: { color:"#fff", fontSize:24, fontWeight:"700" },
+  sharePreviewSub: { color:"#a89cf7", fontSize:14 },
   shareControls: { position:"absolute", bottom:32, left:0, right:0, alignItems:"center" },
   shareBtn: { paddingHorizontal:28, paddingVertical:14, borderRadius:28 },
   shareBtnStart: { backgroundColor:"#534ab7" },

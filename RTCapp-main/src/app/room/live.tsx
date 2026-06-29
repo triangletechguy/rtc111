@@ -1,9 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Alert, PermissionsAndroid, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-
-const APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
 
 const LIVE_ROOMS = [
   { id:"ch_music", host:"MelodyV", title:"Live covers — request songs!", viewers:3205, color:"#9c27b0" },
@@ -26,52 +24,36 @@ export default function SoloLiveRoom() {
   const [mode, setMode] = useState<"lobby"|"host"|"viewer">("lobby");
   const [channel, setChannel] = useState("");
   const [joining, setJoining] = useState(false);
-  const [remoteUid, setRemoteUid] = useState<number|null>(null);
-  const engineRef = useRef<any>(null);
 
   const startEngine = async (ch: string, role: "host"|"viewer") => {
-    const ok = await requestPermissions();
-    if (!ok) return;
-    const { createAgoraRtcEngine, ChannelProfileType, ClientRoleType } = require("react-native-agora");
-    const engine = createAgoraRtcEngine();
-    engineRef.current = engine;
-    engine.initialize({ appId: APP_ID });
-    engine.setChannelProfile(ChannelProfileType.ChannelProfileLiveBroadcasting);
-    engine.setClientRole(role === "host" ? ClientRoleType.ClientRoleBroadcaster : ClientRoleType.ClientRoleAudience);
-    engine.registerEventHandler({
-      onUserJoined: (_c: any, uid: number) => setRemoteUid(uid),
-      onUserOffline: () => setRemoteUid(null),
-    });
-    if (role === "host") { engine.enableVideo(); engine.startPreview(); }
-    await engine.joinChannel(null, ch, 0, {});
+    if (role === "host") {
+      const ok = await requestPermissions();
+      if (!ok) return false;
+    }
+    setChannel(ch);
+    return true;
   };
 
-  const leaveCall = async () => {
-    await engineRef.current?.leaveChannel();
-    engineRef.current?.release();
-    engineRef.current = null;
-    setRemoteUid(null);
+  const leaveCall = () => {
     setMode("lobby");
   };
 
   const goLive = async () => {
     if (!channel.trim()) { Alert.alert("Enter a channel name"); return; }
     setJoining(true);
-    await startEngine(channel.trim(), "host");
+    const ok = await startEngine(channel.trim(), "host");
     setJoining(false);
-    setMode("host");
+    if (ok) setMode("host");
   };
 
   const watchRoom = async (ch: string) => {
-    setChannel(ch);
     setJoining(true);
-    await startEngine(ch, "viewer");
+    const ok = await startEngine(ch, "viewer");
     setJoining(false);
-    setMode("viewer");
+    if (ok) setMode("viewer");
   };
 
   if (mode === "host" || mode === "viewer") {
-    const { RtcSurfaceView, VideoSourceType } = require("react-native-agora");
     return (
       <SafeAreaView style={s.safe}>
         <View style={s.callBar}>
@@ -83,10 +65,13 @@ export default function SoloLiveRoom() {
         </View>
         <View style={{flex:1, backgroundColor:"#000"}}>
           {mode === "host"
-            ? <RtcSurfaceView style={{flex:1}} canvas={{uid:0, sourceType: VideoSourceType.VideoSourceCamera}}/>
-            : remoteUid !== null
-              ? <RtcSurfaceView style={{flex:1}} canvas={{uid: remoteUid, sourceType: VideoSourceType.VideoSourceRemote}}/>
-              : <View style={s.waitBox}><Text style={s.waitText}>Waiting for host…</Text></View>
+            ? (
+              <View style={s.broadcastTile}>
+                <Text style={s.broadcastTitle}>You are live</Text>
+                <Text style={s.broadcastSub}>#{channel}</Text>
+              </View>
+            )
+            : <View style={s.waitBox}><Text style={s.waitText}>Waiting for host...</Text></View>
           }
           {mode === "host" && (
             <View style={s.hostOverlay}>
@@ -149,6 +134,9 @@ const s = StyleSheet.create({
   endBtnText: { color:"#fff", fontSize:13, fontWeight:"600" },
   hostOverlay: { position:"absolute", bottom:24, left:0, right:0, alignItems:"center" },
   hostOverlayText: { color:"rgba(255,255,255,0.7)", fontSize:14, backgroundColor:"rgba(0,0,0,0.5)", paddingHorizontal:16, paddingVertical:6, borderRadius:20 },
+  broadcastTile: { flex:1, alignItems:"center", justifyContent:"center", gap:8, backgroundColor:"#160e20" },
+  broadcastTitle: { color:"#fff", fontSize:24, fontWeight:"700" },
+  broadcastSub: { color:"#d8b6e8", fontSize:14 },
   waitBox: { flex:1, alignItems:"center", justifyContent:"center" },
   waitText: { color:"#888", fontSize:16 },
   goLiveBox: { margin:16, backgroundColor:"#111", borderRadius:16, padding:20, gap:12, borderWidth:0.5, borderColor:"#333" },

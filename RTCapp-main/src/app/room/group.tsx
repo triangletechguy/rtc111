@@ -3,12 +3,6 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Activity
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
-// Web is handled by group.web.tsx — this file is native only
-// But Expo Router require.context still parses this file on web,
-// so we must NOT have top-level native imports. Use require() inside functions.
-
-const APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
-
 async function requestPermissions() {
   if (Platform.OS !== "android") return true;
   const granted = await PermissionsAndroid.requestMultiple([
@@ -36,8 +30,6 @@ export default function GroupVideoRoom() {
   };
 
   if (inCall) {
-    // Lazy require — only executes on native, never parsed as import on web
-    const AgoraUIKit = require("agora-rn-uikit").default;
     return (
       <SafeAreaView style={s.safe}>
         <View style={s.callHeader}>
@@ -47,11 +39,16 @@ export default function GroupVideoRoom() {
             <Text style={s.endBtnText}>End</Text>
           </TouchableOpacity>
         </View>
-        <AgoraUIKit
-          connectionData={{ appId: APP_ID, channel: channel.trim(), token: null }}
-          rtcCallbacks={{ EndCall: () => setInCall(false) }}
-          styleProps={{ localBtnContainer: { backgroundColor: "#1a1a1a" } }}
-        />
+        <View style={s.roomGrid}>
+          <View style={s.primaryTile}>
+            <Text style={s.tileTitle}>You</Text>
+            <Text style={s.tileMeta}>#{channel.trim()}</Text>
+          </View>
+          <View style={s.emptyTile}>
+            <Text style={s.emptyTileTitle}>Waiting for participants</Text>
+            <Text style={s.emptyTileMeta}>People who join this channel will appear here.</Text>
+          </View>
+        </View>
       </SafeAreaView>
     );
   }
@@ -93,6 +90,13 @@ const s = StyleSheet.create({
   channelName: { color:"#fff", fontSize:14, fontWeight:"500", flex:1 },
   endBtn: { backgroundColor:"#e53935", paddingHorizontal:16, paddingVertical:6, borderRadius:20 },
   endBtnText: { color:"#fff", fontSize:13, fontWeight:"600" },
+  roomGrid: { flex:1, padding:16, flexDirection:"row", flexWrap:"wrap", gap:12, alignContent:"flex-start" },
+  primaryTile: { width:"48%", minWidth:150, aspectRatio:4 / 3, borderRadius:12, backgroundColor:"#20152f", borderWidth:1, borderColor:"#6f3c8f", alignItems:"center", justifyContent:"center", padding:16 },
+  tileTitle: { color:"#fff", fontSize:18, fontWeight:"700" },
+  tileMeta: { color:"#d8b6e8", fontSize:13, marginTop:4 },
+  emptyTile: { width:"48%", minWidth:150, aspectRatio:4 / 3, borderRadius:12, backgroundColor:"#151515", borderWidth:1, borderColor:"#2f2f2f", alignItems:"center", justifyContent:"center", padding:16 },
+  emptyTileTitle: { color:"#ddd", fontSize:14, fontWeight:"700", textAlign:"center" },
+  emptyTileMeta: { color:"#888", fontSize:12, marginTop:6, textAlign:"center" },
   lobby: { flex:1, alignItems:"center", justifyContent:"center", paddingHorizontal:32, gap:16 },
   iconCircle: { width:80, height:80, borderRadius:40, backgroundColor:"#f5e6ff", alignItems:"center", justifyContent:"center", marginBottom:8 },
   title: { fontSize:24, fontWeight:"700", color:"#fff" },

@@ -1,5 +1,5 @@
 // packages/sdk/src/rtc/useRtcClient.ts
-// React hook wrapping RtcClient — same public API as the Agora version.
+// React hook wrapping RtcClient with the shared SDK public API.
 // UI components need zero changes.
 
 import { useState, useEffect, useCallback, useRef } from 'react';

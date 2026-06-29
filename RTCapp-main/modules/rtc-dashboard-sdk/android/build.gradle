@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.rtcapp'
+version = '1.0.0'
+
+android {
+  namespace "com.rtcapp.rtcdashboardsdk"
+
+  defaultConfig {
+    minSdkVersion 23
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation project(':rtc-dashboard-sdk$rtc-default-sdk')
+  implementation('io.socket:socket.io-client:2.1.2') {
+    exclude group: 'org.json', module: 'json'
+  }
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}

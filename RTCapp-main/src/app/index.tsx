@@ -14,6 +14,7 @@ const MODES = [
   { label: "1-to-1 Call", icon: "📞", color: "#e6f1fb", iconColor: "#4158d0", route: "/room/call" },
   { label: "Solo Live",   icon: "📡", color: "#fce4ec", iconColor: "#e91e8c", route: "/room/live" },
   { label: "Screen Share",icon: "🖥️", color: "#eeedfe", iconColor: "#534ab7", route: "/room/screen" },
+  { label: "SDK Test",     icon: "🔑", color: "#e8f5ee", iconColor: "#208aef", route: "/video" },
 ];
 
 const NAV = [
@@ -22,6 +23,7 @@ const NAV = [
   { label: "1-to-1 Call",  icon: "📞", route: "/room/call" },
   { label: "Solo Live",    icon: "📡", route: "/room/live" },
   { label: "Screen Share", icon: "🖥️", route: "/room/screen" },
+  { label: "SDK Test",     icon: "🔑", route: "/video" },
 ];
 
 const avatarColors = ["#c850c0","#4158d0","#e91e8c","#9c27b0","#534ab7"];

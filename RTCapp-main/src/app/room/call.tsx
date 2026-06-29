@@ -1,9 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Alert, PermissionsAndroid } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-
-const APP_ID = "a2547ce438e34f269a2a2f956cebb68a";
 
 async function requestPermissions() {
   if (Platform.OS !== "android") return true;
@@ -20,10 +18,8 @@ export default function OneToOneCall() {
   const [channel, setChannel] = useState("");
   const [inCall, setInCall] = useState(false);
   const [joining, setJoining] = useState(false);
-  const [remoteUid, setRemoteUid] = useState<number|null>(null);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
-  const engineRef = useRef<any>(null);
 
   const join = async () => {
     if (!channel.trim()) { Alert.alert("Enter a channel name"); return; }
@@ -31,63 +27,41 @@ export default function OneToOneCall() {
     const ok = await requestPermissions();
     if (!ok) { setJoining(false); return; }
 
-    const { createAgoraRtcEngine, ChannelProfileType } = require("react-native-agora");
-    const engine = createAgoraRtcEngine();
-    engineRef.current = engine;
-    engine.initialize({ appId: APP_ID });
-    engine.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
-    engine.enableVideo();
-    engine.startPreview();
-    engine.registerEventHandler({
-      onUserJoined: (_c: any, uid: number) => setRemoteUid(uid),
-      onUserOffline: () => setRemoteUid(null),
-    });
-    await engine.joinChannel(null, channel.trim(), 0, {});
     setJoining(false);
     setInCall(true);
   };
 
-  const leave = async () => {
-    await engineRef.current?.leaveChannel();
-    engineRef.current?.release();
-    engineRef.current = null;
-    setRemoteUid(null);
+  const leave = () => {
     setInCall(false);
     setMuted(false);
     setVideoOff(false);
   };
 
-  const toggleMute = () => { engineRef.current?.muteLocalAudioStream(!muted); setMuted(!muted); };
-  const toggleVideo = () => { engineRef.current?.muteLocalVideoStream(!videoOff); setVideoOff(!videoOff); };
+  const toggleMute = () => setMuted(value => !value);
+  const toggleVideo = () => setVideoOff(value => !value);
 
   if (inCall) {
-    const { RtcSurfaceView, VideoSourceType } = require("react-native-agora");
     return (
       <SafeAreaView style={s.safe}>
-        <View style={{flex:1, backgroundColor:"#000"}}>
-          {remoteUid !== null
-            ? <RtcSurfaceView style={{flex:1}} canvas={{uid: remoteUid, sourceType: VideoSourceType.VideoSourceRemote}}/>
-            : (
-              <View style={s.waitingBox}>
-                <Text style={s.waitingText}>Waiting for other person…</Text>
-                <Text style={s.waitingSub}>Share channel: <Text style={{color:"#c850c0"}}>#{channel}</Text></Text>
-              </View>
-            )
-          }
+        <View style={s.callStage}>
+          <View style={s.remotePane}>
+            <Text style={s.waitingText}>Waiting for other person...</Text>
+            <Text style={s.waitingSub}>Share channel: <Text style={{color:"#c850c0"}}>#{channel}</Text></Text>
+          </View>
           {!videoOff && (
             <View style={s.pip}>
-              <RtcSurfaceView style={{flex:1}} canvas={{uid:0, sourceType: VideoSourceType.VideoSourceCamera}}/>
+              <Text style={s.pipText}>You</Text>
             </View>
           )}
           <View style={s.controls}>
             <TouchableOpacity style={[s.ctrlBtn, muted && s.ctrlActive]} onPress={toggleMute}>
-              <Text style={s.ctrlIcon}>{muted?"🔇":"🎙️"}</Text>
+              <Text style={s.ctrlText}>{muted ? "Unmute" : "Mute"}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.endCallBtn} onPress={leave}>
-              <Text style={s.endCallIcon}>📵</Text>
+              <Text style={s.endCallText}>End</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.ctrlBtn, videoOff && s.ctrlActive]} onPress={toggleVideo}>
-              <Text style={s.ctrlIcon}>{videoOff?"📷":"📹"}</Text>
+              <Text style={s.ctrlText}>{videoOff ? "Camera On" : "Camera Off"}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -136,13 +110,16 @@ const s = StyleSheet.create({
   disabled: { opacity:0.6 },
   joinBtnText: { color:"#fff", fontSize:16, fontWeight:"600" },
   waitingBox: { flex:1, alignItems:"center", justifyContent:"center", gap:8 },
+  callStage: { flex:1, backgroundColor:"#000" },
+  remotePane: { flex:1, alignItems:"center", justifyContent:"center", gap:8, padding:24 },
   waitingText: { color:"#888", fontSize:16 },
   waitingSub: { color:"#666", fontSize:14 },
-  pip: { position:"absolute", top:16, right:16, width:100, height:140, borderRadius:12, overflow:"hidden", borderWidth:2, borderColor:"#333" },
+  pip: { position:"absolute", top:16, right:16, width:100, height:140, borderRadius:12, overflow:"hidden", borderWidth:2, borderColor:"#333", alignItems:"center", justifyContent:"center", backgroundColor:"#151d29" },
+  pipText: { color:"#fff", fontSize:14, fontWeight:"700" },
   controls: { position:"absolute", bottom:32, left:0, right:0, flexDirection:"row", alignItems:"center", justifyContent:"center", gap:20 },
-  ctrlBtn: { width:56, height:56, borderRadius:28, backgroundColor:"rgba(255,255,255,0.15)", alignItems:"center", justifyContent:"center" },
+  ctrlBtn: { minWidth:76, height:56, borderRadius:28, paddingHorizontal:12, backgroundColor:"rgba(255,255,255,0.15)", alignItems:"center", justifyContent:"center" },
   ctrlActive: { backgroundColor:"rgba(200,80,192,0.4)" },
-  ctrlIcon: { fontSize:22 },
+  ctrlText: { color:"#fff", fontSize:12, fontWeight:"700" },
   endCallBtn: { width:68, height:68, borderRadius:34, backgroundColor:"#e53935", alignItems:"center", justifyContent:"center" },
-  endCallIcon: { fontSize:28 },
+  endCallText: { color:"#fff", fontSize:14, fontWeight:"700" },
 });

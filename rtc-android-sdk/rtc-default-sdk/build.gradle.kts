@@ -146,8 +146,47 @@ val bundleSelfContainedReleaseAar by tasks.registering {
     }
 }
 
+val syncReleaseArtifacts by tasks.registering {
+    group = "build"
+    description = "Copies release AAR outputs to repository integration locations."
+
+    dependsOn("bundleReleaseAar", bundleSelfContainedReleaseAar)
+
+    val releaseAar = layout.buildDirectory.file("outputs/aar/rtc-default-sdk-release.aar")
+    val selfContainedAar = layout.buildDirectory.file("outputs/aar/rtc-default-sdk-release-self-contained.aar")
+    val repositoryRoot = rootProject.file("..")
+    val flutterLocalMavenAar = rootProject.file(
+        "../rtc_flutter_sdk/android/local-maven/com/rtcone/rtc-default-sdk/0.1.0/rtc-default-sdk-0.1.0.aar"
+    )
+    val expoBridgeAar = rootProject.file(
+        "../RTCapp-main/modules/rtc-dashboard-sdk/android/libs/rtc-default-sdk-release.aar"
+    )
+
+    inputs.files(releaseAar, selfContainedAar)
+    outputs.files(
+        repositoryRoot.resolve("rtc-default-sdk-release.aar"),
+        repositoryRoot.resolve("funint.online.aar"),
+        flutterLocalMavenAar,
+        expoBridgeAar
+    )
+
+    doLast {
+        val release = releaseAar.get().asFile
+        val selfContained = selfContainedAar.get().asFile
+
+        selfContained.copyTo(repositoryRoot.resolve("rtc-default-sdk-release.aar"), overwrite = true)
+        selfContained.copyTo(repositoryRoot.resolve("funint.online.aar"), overwrite = true)
+
+        flutterLocalMavenAar.parentFile.mkdirs()
+        release.copyTo(flutterLocalMavenAar, overwrite = true)
+
+        expoBridgeAar.parentFile.mkdirs()
+        selfContained.copyTo(expoBridgeAar, overwrite = true)
+    }
+}
+
 tasks.matching { it.name == "assembleRelease" }.configureEach {
-    finalizedBy(bundleSelfContainedReleaseAar)
+    finalizedBy(syncReleaseArtifacts)
 }
 
 fun zipDirectory(sourceDir: File, targetFile: File) {
