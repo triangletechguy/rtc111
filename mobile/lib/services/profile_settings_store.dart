@@ -1,7 +1,3 @@
-import 'dart:convert';
-
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import '../models/app_user.dart';
 
 class ProfileSettings {
@@ -132,34 +128,19 @@ abstract class ProfileSettingsStore {
   Future<void> write(AppUser user, ProfileSettings settings);
 }
 
-class FlutterSecureProfileSettingsStore implements ProfileSettingsStore {
-  const FlutterSecureProfileSettingsStore([
-    this._storage = const FlutterSecureStorage(),
-  ]);
+class InMemoryProfileSettingsStore implements ProfileSettingsStore {
+  const InMemoryProfileSettingsStore([Object? _]);
 
-  final FlutterSecureStorage _storage;
+  static final Map<String, ProfileSettings> _values = {};
 
   @override
   Future<ProfileSettings> read(AppUser user) async {
-    final raw = await _storage.read(key: _key(user));
-    if (raw == null || raw.isEmpty) return ProfileSettings.defaults(user);
-    try {
-      final data = jsonDecode(raw);
-      if (data is Map) {
-        return ProfileSettings.fromJson(
-          Map<String, dynamic>.from(data),
-          user: user,
-        );
-      }
-    } catch (_) {
-      // Invalid local settings should not block profile access.
-    }
-    return ProfileSettings.defaults(user);
+    return _values[_key(user)] ?? ProfileSettings.defaults(user);
   }
 
   @override
-  Future<void> write(AppUser user, ProfileSettings settings) {
-    return _storage.write(key: _key(user), value: jsonEncode(settings));
+  Future<void> write(AppUser user, ProfileSettings settings) async {
+    _values[_key(user)] = settings;
   }
 
   String _key(AppUser user) => 'rtc_profile_settings_${user.id}';

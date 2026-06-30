@@ -1,7 +1,6 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -21,15 +20,10 @@ android {
         applicationId = "com.rtcenterprise.rtc_enterprise_mobile"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(23, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        buildConfigField("String", "RTC_API_BASE_URL", apiOnlyBaseUrl().quotedBuildConfigValue())
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 
     buildTypes {
@@ -55,23 +49,10 @@ flutter {
     source = "../.."
 }
 
-fun apiOnlyBaseUrl(): String {
-    val properties = Properties()
-    val localPropertiesFile = rootProject.file("local.properties")
-    if (localPropertiesFile.exists()) {
-        localPropertiesFile.inputStream().use { properties.load(it) }
+dependencies {
+    implementation(files("libs/funint.online.aar"))
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude(group = "org.json", module = "json")
     }
-    return (System.getenv("API_URL")
-        ?: System.getenv("API_BASE_URL")
-        ?: System.getenv("RTC_API_URL")
-        ?: System.getenv("RTC_API_BASE_URL")
-        ?: properties.getProperty("api.url")
-        ?: properties.getProperty("api.baseUrl")
-        ?: "https://funint.online/api")
-        .trim()
-        .trimEnd('/')
-}
-
-fun String.quotedBuildConfigValue(): String {
-    return "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

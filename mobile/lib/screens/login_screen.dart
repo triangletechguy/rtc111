@@ -213,7 +213,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Sign in or create a host profile for live RTC rooms, chat, and creator flows.',
+            'Sign in or create a host profile for live rooms, chat, and creator flows.',
             style: TextStyle(
               color: RtcPalette.muted,
               fontWeight: FontWeight.w700,
@@ -759,7 +759,7 @@ class _PreviewLiveCard extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'Native RTC',
+                          'UI Preview',
                           style: TextStyle(
                             color: RtcPalette.muted,
                             fontSize: 12,

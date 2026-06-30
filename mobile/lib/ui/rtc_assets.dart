@@ -149,14 +149,13 @@ class RtcAssets {
 
   static ImageProvider avatarImageForUser(AppUser user) {
     final avatarUrl = user.avatarUrl.trim();
-    if (_isRemoteImage(avatarUrl)) return NetworkImage(avatarUrl);
     if (avatarUrl.startsWith('assets/')) return AssetImage(avatarUrl);
     return AssetImage(avatarForIndex(user.id));
   }
 
   static bool hasCustomAvatar(AppUser user) {
     final avatarUrl = user.avatarUrl.trim();
-    return _isRemoteImage(avatarUrl) || avatarUrl.startsWith('assets/');
+    return avatarUrl.startsWith('assets/');
   }
 
   static bool shouldUseAdminAvatar(AppUser user) {
@@ -194,20 +193,14 @@ class RtcAssets {
 
   static ImageProvider coverImageForRoom(Room room, int index) {
     final profileImage = room.profileImage.trim();
-    if (_isRemoteImage(profileImage)) return NetworkImage(profileImage);
     if (profileImage.startsWith('assets/')) return AssetImage(profileImage);
     return AssetImage(coverForRoomType(room.roomType, room.privacyType, index));
   }
 
   static ImageProvider? imageProviderFromValue(String value) {
     final trimmed = value.trim();
-    if (_isRemoteImage(trimmed)) return NetworkImage(trimmed);
     if (trimmed.startsWith('assets/')) return AssetImage(trimmed);
     return null;
-  }
-
-  static bool _isRemoteImage(String value) {
-    return value.startsWith('http://') || value.startsWith('https://');
   }
 
   static int _safeIndex(int index, int length) {

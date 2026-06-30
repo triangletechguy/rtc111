@@ -56,7 +56,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _user = widget.user;
     _section = _sectionFor(widget.initialSection);
     _settingsStore =
-        widget.settingsStore ?? const FlutterSecureProfileSettingsStore();
+        widget.settingsStore ?? const InMemoryProfileSettingsStore();
     _settings = ProfileSettings.defaults(_user);
     _name = TextEditingController();
     _age = TextEditingController();
@@ -1349,7 +1349,7 @@ const _policies = [
     id: 'terms',
     title: 'Terms of Service',
     summary:
-        'The basic rules for using TalkEachOther rooms, chat, profiles, and RTC features.',
+        'The basic rules for using TalkEachOther rooms, chat, profiles, and preview features.',
     icon: Icons.gavel_outlined,
     sections: [
       _PolicySection(
@@ -1479,9 +1479,6 @@ ImageProvider _avatarImage(AppUser user, String avatarValue) {
   final trimmed = avatarValue.trim();
   final dataUri = _memoryImageFromDataUri(trimmed);
   if (dataUri != null) return dataUri;
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return NetworkImage(trimmed);
-  }
   if (trimmed.startsWith('assets/')) return AssetImage(trimmed);
   return RtcAssets.avatarImageForUser(
     AppUser(

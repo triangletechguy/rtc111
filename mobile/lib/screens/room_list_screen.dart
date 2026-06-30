@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
@@ -697,7 +696,7 @@ class _CreateRoomSheetState extends State<_CreateRoomSheet> {
       final submitMessage = apiErrorMessage(error);
       setState(() {
         _pendingDraft = null;
-        _errors = {..._roomFormErrorsFromApi(error), 'submit': submitMessage};
+        _errors = {'submit': submitMessage};
         _status = submitMessage;
       });
     } finally {
@@ -848,7 +847,7 @@ class _CreateRoomSheetState extends State<_CreateRoomSheet> {
                 keyboardType: TextInputType.url,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(
-                  labelText: 'Profile image URL',
+                  labelText: 'Profile image asset path',
                   prefixIcon: Icon(Icons.image_outlined),
                 ),
               ),
@@ -3972,9 +3971,6 @@ ImageProvider _contactImage(Map<String, dynamic>? contact) {
   final avatarUrl = _mapString(
     contact?['peer_avatar_url'] ?? contact?['avatar_url'],
   );
-  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
-    return NetworkImage(avatarUrl);
-  }
   if (avatarUrl.startsWith('assets/')) return AssetImage(avatarUrl);
   return AssetImage(
     RtcAssets.avatarForIndex(_mapInt(contact?['peer_id']) ?? 0),
@@ -3983,9 +3979,6 @@ ImageProvider _contactImage(Map<String, dynamic>? contact) {
 
 ImageProvider _participantImage(RoomParticipantPreview preview, int index) {
   final avatarUrl = preview.avatarUrl.trim();
-  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
-    return NetworkImage(avatarUrl);
-  }
   if (avatarUrl.startsWith('assets/')) return AssetImage(avatarUrl);
   return AssetImage(RtcAssets.avatarForIndex(preview.userId + index));
 }
@@ -4117,20 +4110,6 @@ Map<String, String> _validateRoomForm(_RoomFormValues form) {
   }
 
   return errors;
-}
-
-Map<String, String> _roomFormErrorsFromApi(Object error) {
-  if (error is! DioException) return const {};
-  final data = error.response?.data;
-  if (data is! Map) return const {};
-  final errors = data['errors'];
-  if (errors is! Map) return const {};
-  return errors.map((key, value) {
-    final message = value is List && value.isNotEmpty
-        ? value.first.toString()
-        : value.toString();
-    return MapEntry(key.toString(), message);
-  });
 }
 
 String compactNumber(num value) {

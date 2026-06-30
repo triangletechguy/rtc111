@@ -24,8 +24,6 @@ class Room {
     this.status = 'active',
     this.createdAt = '',
     this.updatedAt = '',
-    this.enterpriseRoomId = 0,
-    this.signalingRoom = '',
   });
 
   final int id;
@@ -52,17 +50,10 @@ class Room {
   final String status;
   final String createdAt;
   final String updatedAt;
-  final int enterpriseRoomId;
-  final String signalingRoom;
 
   bool get supportsVideo => videoCapableRoomTypes.contains(roomType);
   bool get isPrivate => privacyType == 'private';
   bool get isLocked => isPasswordProtected || privacyType == 'password';
-  int get rtcRoomId => enterpriseRoomId > 0 ? enterpriseRoomId : id;
-
-  bool get hasRtcMapping {
-    return enterpriseRoomId > 0 || signalingRoom.trim().isNotEmpty;
-  }
 
   String get displayHost {
     final name = ownerName.trim();
@@ -166,22 +157,6 @@ class Room {
       status: (json['status'] ?? 'active').toString(),
       createdAt: (json['created_at'] ?? json['createdAt'] ?? '').toString(),
       updatedAt: (json['updated_at'] ?? json['updatedAt'] ?? '').toString(),
-      enterpriseRoomId: _asInt(
-        json['enterprise_room_id'] ??
-            json['enterpriseRoomId'] ??
-            json['rtc_room_id'] ??
-            json['rtcRoomId'] ??
-            json['client_room_id'] ??
-            json['clientRoomId'],
-      ),
-      signalingRoom:
-          (json['signaling_room'] ??
-                  json['signalingRoom'] ??
-                  json['rtc_signaling_room'] ??
-                  json['rtcSignalingRoom'] ??
-                  '')
-              .toString()
-              .trim(),
     );
   }
 }

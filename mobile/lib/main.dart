@@ -195,6 +195,11 @@ class NativeRtcShell extends StatefulWidget {
 }
 
 class _NativeRtcShellState extends State<NativeRtcShell> {
+  static const _autoDemoLogin = bool.fromEnvironment(
+    'AUTO_DEMO_LOGIN',
+    defaultValue: false,
+  );
+
   late final ApiClient _api;
   bool _booting = true;
   AppUser? _user;
@@ -228,6 +233,20 @@ class _NativeRtcShellState extends State<NativeRtcShell> {
       if (!mounted) return;
 
       if (session == null) {
+        if (_autoDemoLogin) {
+          final demoSession = await _api.login(
+            'admin@gmail.com',
+            'admin@gmail.com',
+          );
+          if (!mounted) return;
+          setState(() {
+            _user = demoSession.user;
+            _booting = false;
+            _bootStatus = '';
+          });
+          return;
+        }
+
         setState(() {
           _booting = false;
           _bootStatus = '';
@@ -367,7 +386,7 @@ class _BootScreen extends StatelessWidget {
                   children: [
                     const BrandHeader(
                       title: 'TalkEachOther',
-                      subtitle: 'Native Flutter RTC',
+                      subtitle: 'Mobile UI Preview',
                     ),
                     const SizedBox(height: 18),
                     const LinearProgressIndicator(minHeight: 3),

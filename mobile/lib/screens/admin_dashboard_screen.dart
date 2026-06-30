@@ -37,11 +37,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     text: 'Flutter Client App',
   );
   final _sdkCompanyNameController = TextEditingController();
-  final _originsController = TextEditingController(
-    text: 'https://client.example.com',
-  );
+  final _originsController = TextEditingController(text: 'client-preview');
   final _verifySdkTokenController = TextEditingController();
-  final _roomNameController = TextEditingController(text: 'Native RTC room');
+  final _roomNameController = TextEditingController(
+    text: 'Mobile preview room',
+  );
   final _roomPasswordController = TextEditingController();
   final _roomSeatsController = TextEditingController(text: '8');
 
@@ -178,7 +178,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       title: isSuperAdmin
                           ? 'Client Company Dashboard'
                           : 'Company Service Console',
-                      subtitle: 'Native RTC service management',
+                      subtitle: 'Mobile UI management preview',
                       trailing: RtcIconButton(
                         icon: Icons.arrow_back,
                         tooltip: 'Rooms',
@@ -311,7 +311,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             children: [
               RtcSectionHeader(
                 eyebrow: 'Service',
-                title: 'RTC Control Center',
+                title: 'UI Control Center',
                 detail:
                     _map(enterprise['service_model'])['purpose']?.toString() ??
                     'Rooms, usage, app access, feature controls, and billing.',
@@ -358,7 +358,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               const SizedBox(height: 12),
               if (serviceFlow.isEmpty)
                 const _MutedText(
-                  'Create app, sync users, open rooms, issue RTC tokens, and bill usage.',
+                  'Preview app access, users, rooms, demo tokens, and usage cards.',
                 )
               else
                 ...serviceFlow.take(6).map((step) {
@@ -528,7 +528,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 title: '${plans.length} service plans',
                 detail: isSuperAdmin
                     ? 'Approve company package requests and audit plan capacity.'
-                    : 'Request the package your company needs for native RTC growth.',
+                    : 'Request the package your company needs for preview growth.',
               ),
               const SizedBox(height: 12),
               if (plans.isEmpty)
@@ -648,10 +648,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             children: [
               RtcSectionHeader(
                 eyebrow: 'Integration',
-                title: 'Generate app SDK token',
+                title: 'Generate app demo token',
                 detail:
                     accessStatus['auth_flow']?.toString() ??
-                    'Create an app key, API key, SDK token, and SDK handoff for a client app.',
+                    'Create local demo credentials for the client app UI handoff.',
               ),
               const SizedBox(height: 12),
               if (isSuperAdmin && clients.isNotEmpty) ...[
@@ -692,7 +692,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 onPressed: _busy
                     ? null
                     : () => _perform(
-                        'SDK token generated.',
+                        'Demo token generated.',
                         () => widget.api.adminCreateSdkToken(
                           appName: _appAccessNameController.text,
                           companyName: isSuperAdmin
@@ -711,7 +711,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         },
                       ),
                 icon: const Icon(Icons.vpn_key_outlined, color: Colors.white),
-                child: const Text('Generate SDK token'),
+                child: const Text('Generate demo token'),
               ),
               if (_lastCredentials != null) ...[
                 const SizedBox(height: 12),
@@ -727,14 +727,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               const SizedBox(height: 14),
               const RtcSectionHeader(
                 eyebrow: 'Verify',
-                title: 'Check SDK token readiness',
+                title: 'Check demo token readiness',
                 detail:
-                    'Paste a full SDK token to confirm the client app, company, package, and feature access are ready.',
+                    'Paste a demo token to preview the app, company, package, and feature access states.',
               ),
               const SizedBox(height: 12),
               _AdminInput(
                 controller: _verifySdkTokenController,
-                label: 'SDK token',
+                label: 'Demo token',
                 icon: Icons.verified_user_outlined,
               ),
               const SizedBox(height: 12),
@@ -743,7 +743,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     _busy || _verifySdkTokenController.text.trim().isEmpty
                     ? null
                     : () => _perform(
-                        'SDK token verified.',
+                        'Demo token verified.',
                         () => widget.api.adminVerifySdkToken(
                           _verifySdkTokenController.text,
                         ),
@@ -756,7 +756,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   Icons.fact_check_outlined,
                   color: Colors.white,
                 ),
-                child: const Text('Verify SDK token'),
+                child: const Text('Verify demo token'),
               ),
               if (_lastVerification != null) ...[
                 const SizedBox(height: 12),
@@ -865,7 +865,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             children: [
               const RtcSectionHeader(
                 eyebrow: 'Rooms',
-                title: 'Create managed RTC room',
+                title: 'Create managed preview room',
                 detail:
                     'This uses the native service endpoint from the web room management panel.',
               ),
@@ -928,7 +928,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                       ),
                 icon: const Icon(Icons.add_home_outlined, color: Colors.white),
-                child: const Text('Create RTC room'),
+                child: const Text('Create preview room'),
               ),
             ],
           ),
@@ -1078,7 +1078,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ...recentLogs.take(10).map((log) {
                   final row = _map(log);
                   return _AdminRow(
-                    title: row['room_name']?.toString() ?? 'RTC session',
+                    title: row['room_name']?.toString() ?? 'Preview session',
                     subtitle:
                         '${row['user_name'] ?? 'Participant'} · ${row['usage_type'] ?? 'media'}',
                     meta: '${_number(row['billable_minutes'])} min',
@@ -1113,7 +1113,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             children: [
               const RtcSectionHeader(
                 eyebrow: 'Health',
-                title: 'RTC service verification',
+                title: 'Preview service verification',
                 detail:
                     'Native status mirrors the web dashboard health, feature, and active-session panels.',
               ),
@@ -1124,7 +1124,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 children: [
                   StatusPill(
                     label: service['rtc_provider']?.toString() ?? 'online',
-                    detail: 'RTC provider',
+                    detail: 'Preview provider',
                     state: service['connection_indicator'] == 'attention'
                         ? RtcStatusState.warning
                         : RtcStatusState.good,
@@ -1434,7 +1434,7 @@ class _SecretBox extends StatelessWidget {
     final lines = [
       'APP_KEY=${credentials['app_key'] ?? ''}',
       'API_KEY=${credentials['api_key'] ?? ''}',
-      'RTC_SDK_TOKEN=${credentials['sdk_token'] ?? ''}',
+      'DEMO_TOKEN=${credentials['sdk_token'] ?? ''}',
       'SDK_TOKEN_HEADER=$tokenHeader',
       'SDK_FILE=$sdkFile',
       'VERIFY_ENDPOINT=$verifyEndpoint',
@@ -1477,7 +1477,7 @@ class _SecretBox extends StatelessWidget {
             [
               lines,
               '',
-              'Flutter: --dart-define=RTC_SDK_TOKEN=<token>',
+              'Flutter: UI preview token only',
               'Smoke test: $smokeTest()',
             ].join('\n'),
             style: const TextStyle(
@@ -1508,7 +1508,7 @@ class _VerificationBox extends StatelessWidget {
     final status = result['integration_status']?.toString() ?? 'unknown';
     final message =
         result['message']?.toString() ??
-        (ok ? 'SDK token is ready.' : 'SDK token is not ready.');
+        (ok ? 'Demo token is ready.' : 'Demo token is not ready.');
     final rows = [
       'Status: $status',
       if (company.isNotEmpty) 'Company: ${company['name'] ?? company['id']}',
@@ -1778,7 +1778,7 @@ String _sdkFileForPlatform(String value) {
   return switch (platform) {
     'android' => 'rtc-enterprise-sdk/docs/ANDROID_INTEGRATION.md',
     'server' => 'rtc-enterprise-sdk/docs/FLUTTER_INTEGRATION.md',
-    _ => 'rtc-enterprise-sdk/flutter/rtc_gateway_sdk.dart',
+    _ => 'mobile-ui-preview/local-demo-handoff.dart',
   };
 }
 
